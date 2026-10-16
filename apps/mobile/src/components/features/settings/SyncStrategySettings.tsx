@@ -11,6 +11,7 @@ import {
   TRACKING_PRESETS,
   SelectablePreset,
   SyncCondition,
+  AccuracyMode,
   SavedTrackingProfile
 } from "../../../types/global"
 import { fonts, fontSizes, lineHeights } from "../../../styles/typography"
@@ -19,6 +20,7 @@ import {
   Button,
   Card,
   Divider,
+  FieldMessage,
   NumericInput,
   RadioRow,
   SectionTitle,
@@ -51,6 +53,11 @@ interface SyncStrategySettingsProps {
 type NumericKey = "interval" | "distance" | "accuracyThreshold"
 
 const NUMERIC_MIN: Record<NumericKey, number> = { interval: 1, distance: 0, accuracyThreshold: 1 }
+
+const ACCURACY_MODE_OPTIONS: { value: AccuracyMode; labelKey: TranslationKey; subKey: TranslationKey }[] = [
+  { value: "high", labelKey: "trackingSync.accuracy.high", subKey: "trackingSync.accuracy.high.sub" },
+  { value: "balanced", labelKey: "trackingSync.accuracy.balanced", subKey: "trackingSync.accuracy.balanced.sub" }
+]
 
 const SYNC_CONDITION_OPTIONS: { value: SyncCondition; labelKey: TranslationKey; subKey: TranslationKey }[] = [
   { value: "any", labelKey: "trackingSync.condition.any", subKey: "trackingSync.condition.any.sub" },
@@ -388,6 +395,27 @@ export function SyncStrategySettings({
         </>
       )}
 
+      <SectionTitle style={styles.groupTop}>{t("trackingSync.accuracy.title")}</SectionTitle>
+      <Card rows>
+        <View accessibilityRole="radiogroup" accessibilityLabel={t("trackingSync.accuracy.title")} style={styles.group}>
+          {ACCURACY_MODE_OPTIONS.map(({ value, labelKey, subKey }) => (
+            <RadioRow
+              key={value}
+              testID={`accuracy-mode-${value}`}
+              label={t(labelKey)}
+              sub={t(subKey)}
+              selected={settings.accuracyMode === value}
+              onPress={() => {
+                const next = { ...settings, accuracyMode: value }
+                onSettingsChange(next)
+                onImmediateSave(next)
+              }}
+            />
+          ))}
+        </View>
+        <FieldMessage style={styles.hintTail}>{t("trackingSync.accuracy.hint")}</FieldMessage>
+      </Card>
+
       <SectionTitle style={styles.groupTop}>{t("trackingSync.section.accuracy")}</SectionTitle>
       <Card rows>
         <SettingRow label={t("trackingSync.filter")} hint={filterHint}>
@@ -446,6 +474,10 @@ const styles = StyleSheet.create({
   // Button bakes marginVertical space.sm, which completes the 16 to the next row.
   revealButtonTail: {
     paddingBottom: space.sm
+  },
+  // A rows Card strips its own vertical padding, so the trailing hint has to carry the card's inset.
+  hintTail: {
+    marginBottom: space.lg
   },
   batch: {
     paddingTop: space.lg

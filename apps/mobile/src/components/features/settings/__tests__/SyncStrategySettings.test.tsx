@@ -34,6 +34,7 @@ jest.mock("../../../index", () => {
         sub ? R.createElement(Text, null, sub) : null
       ),
     SectionTitle: ({ children }: any) => R.createElement(Text, null, children),
+    FieldMessage: ({ children }: any) => R.createElement(Text, null, children),
     Card: ({ children, style }: any) => R.createElement(View, { testID: "card", style }, children),
     Divider: () => R.createElement(View, { testID: "divider" }),
     StateLine: ({ label, caption, testID }: any) =>
@@ -165,6 +166,7 @@ describe("SyncStrategySettings", () => {
       expect(getByText("Recording")).toBeTruthy()
       expect(getByText("Sync interval")).toBeTruthy()
       expect(getByText("Sync only on")).toBeTruthy()
+      expect(getByText("Positioning accuracy")).toBeTruthy()
       expect(getByText("Accuracy filter")).toBeTruthy()
       expect(queryByText("Network settings")).toBeNull()
     })
@@ -513,6 +515,30 @@ describe("SyncStrategySettings", () => {
 
       expect(mockOnSettingsChange).toHaveBeenCalledWith(expect.objectContaining({ accuracyThreshold: 1 }))
       expect(mockOnImmediateSave).toHaveBeenCalledWith(expect.objectContaining({ accuracyThreshold: 1 }))
+    })
+  })
+
+  describe("positioning accuracy", () => {
+    it("offers High accuracy and Lower accuracy, defaulting to High accuracy", () => {
+      const { getByTestId, getByText } = renderComponent()
+
+      expect(getByText("Positioning accuracy")).toBeTruthy()
+      expect(getByTestId("accuracy-mode-high").props.accessibilityState).toMatchObject({ checked: true })
+      expect(getByTestId("accuracy-mode-balanced").props.accessibilityState).toMatchObject({ checked: false })
+      expect(
+        getByText(
+          "Both options affect the continuous stream only. Fresh checks for geofences and the stationary heartbeat stay high accuracy."
+        )
+      ).toBeTruthy()
+    })
+
+    it("saves Lower accuracy immediately, like the other recording controls", () => {
+      const { getByTestId } = renderComponent({ accuracyMode: "high" })
+
+      fireEvent.press(getByTestId("accuracy-mode-balanced"))
+
+      expect(mockOnSettingsChange).toHaveBeenCalledWith(expect.objectContaining({ accuracyMode: "balanced" }))
+      expect(mockOnImmediateSave).toHaveBeenCalledWith(expect.objectContaining({ accuracyMode: "balanced" }))
     })
   })
 
