@@ -1,1 +1,2 @@
 - Fixed text showing only its top edge on Samsung DeX and other external displays
+- Fixed the Bearer token label showing as asterisks in Chinese
