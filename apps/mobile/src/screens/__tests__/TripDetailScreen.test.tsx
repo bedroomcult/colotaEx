@@ -107,6 +107,8 @@ jest.mock("../../hooks/useTheme", () => ({
       border: "#e5e7eb",
       card: "#fff",
       background: "#fff",
+      success: "#2E7D32",
+      warning: "#C2410C",
       error: "#ef4444"
     }
   })
@@ -333,8 +335,53 @@ describe("TripDetailScreen - figures card", () => {
     await act(async () => {})
 
     const seams = getAllByTestId("divider")
-    expect(seams).toHaveLength(3)
+    expect(seams).toHaveLength(4)
     for (const seam of seams) expect(seam.props).toMatchObject({ tight: true, inset: true })
+  })
+})
+
+describe("TripDetailScreen - max speed and the speed ramp", () => {
+  beforeEach(async () => {
+    ;(NativeLocationService.getSetting as jest.Mock).mockImplementation((key: string) =>
+      Promise.resolve(key === "unitSystem" ? "metric" : "")
+    )
+    await loadDisplayPreferences()
+  })
+
+  afterEach(async () => {
+    ;(NativeLocationService.getSetting as jest.Mock).mockResolvedValue("")
+    await loadDisplayPreferences()
+  })
+
+  const withSpeeds = (speeds: number[]) => {
+    const trip = makeTrip(speeds.length)
+    trip.locations = trip.locations.map((l, i) => ({ ...l, speed: speeds[i] }))
+    return trip
+  }
+
+  it("prints the peak speed straight after the average, in the same unit", async () => {
+    const { getAllByRole } = render(<TripDetailScreen {...makeProps(withSpeeds([2, 4, 12]))} />)
+    await act(async () => {})
+
+    const labels = getAllByRole("text").map((row) => String(row.props.accessibilityLabel))
+    const avg = labels.findIndex((label) => label.startsWith("Avg speed, "))
+    expect(labels[avg + 1]).toMatch(/^Max speed, 43[.,]2 km\/h$/)
+  })
+
+  it("names both ends of the ramp the map draws, so the reds are readable", async () => {
+    const { getByTestId } = render(<TripDetailScreen {...makeProps(withSpeeds([0, 6, 12]))} />)
+    await act(async () => {})
+
+    expect(getByTestId("speed-legend").props.accessibilityLabel).toMatch(
+      /^Speed gradient from 0[.,]0 km\/h to 43[.,]2 km\/h$/
+    )
+  })
+
+  it("leaves the legend off a trip whose fixes carry no speed, where one colour says nothing", async () => {
+    const { queryByTestId } = render(<TripDetailScreen {...makeProps(makeTrip(4))} />)
+    await act(async () => {})
+
+    expect(queryByTestId("speed-legend")).toBeNull()
   })
 })
 

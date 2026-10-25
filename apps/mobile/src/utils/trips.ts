@@ -203,6 +203,8 @@ function buildTrip(locations: LocationCoords[], startIndex: number): Trip {
 
 export interface TripStats {
   avgSpeed: number // m/s
+  /** The fastest fix the trip reports. 0 when none of them carries a speed. */
+  maxSpeed: number // m/s
   elevationGain: number // meters
   elevationLoss: number // meters
 }
@@ -305,8 +307,15 @@ export function computeTripStats(locations: LocationCoords[]): TripStats {
     if (seconds > 0) avgSpeed = computeTotalDistance(locations) / seconds
   }
 
+  // A fix without a speed says nothing, rather than reading as a stationary one
+  let maxSpeed = 0
+  for (const loc of locations) {
+    if (loc.speed != null && loc.speed > maxSpeed) maxSpeed = loc.speed
+  }
+
   return {
     avgSpeed,
+    maxSpeed,
     elevationGain,
     elevationLoss
   }

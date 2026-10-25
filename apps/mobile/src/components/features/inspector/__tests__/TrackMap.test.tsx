@@ -544,3 +544,32 @@ describe("TrackMap note overrides", () => {
     expect(locationsPassed[0].note).toBe("stored")
   })
 })
+
+describe("TrackMap speed ramp", () => {
+  const rampColors = require("@colota/shared").lightColors
+  const locations = [
+    { ...loc(52.5, 13.4), id: 1, speed: 0 },
+    { ...loc(52.55, 13.45), id: 2, speed: 6 },
+    { ...loc(52.6, 13.5), id: 3, speed: 12 }
+  ]
+  const drawnColors = () => mockBuildPoints.mock.calls.at(-1)![2] as string[]
+
+  it("ramps from the trip's slowest fix to a red at its fastest", () => {
+    renderMap({ locations, colors: rampColors, colorMode: "speed" })
+
+    expect(drawnColors()).toEqual([rampColors.success, expect.any(String), rampColors.error])
+  })
+
+  it("colours the dots off the same ramp as the line, so a point never contradicts its segment", () => {
+    renderMap({ locations, colors: rampColors, colorMode: "speed" })
+    const segmentColors = mockBuildSegments.mock.calls.at(-1)![2].locationColors as string[]
+
+    expect(segmentColors).toEqual(drawnColors())
+  })
+
+  it("keeps colouring by trip unless the ramp is asked for, since that is what pairs a line with its row", () => {
+    renderMap({ ...twoTrips, colors: rampColors })
+
+    expect(drawnColors()).toEqual(["#trip1", "#trip1", "#trip2", "#trip2"])
+  })
+})

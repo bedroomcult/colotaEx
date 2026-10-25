@@ -1,6 +1,8 @@
 import {
   lerpColor,
   getSpeedColor,
+  speedRange,
+  speedRampColor,
   createCirclePolygon,
   buildTrackSegmentsGeoJSON,
   buildTrackPointsGeoJSON,
@@ -72,6 +74,58 @@ describe("getSpeedColor", () => {
     expect(color).toMatch(/^rgb\(\d+,\d+,\d+\)$/)
     expect(color).not.toBe(colors.warning)
     expect(color).not.toBe(colors.error)
+  })
+})
+
+// ============================================================================
+// speedRange
+// ============================================================================
+
+describe("speedRange", () => {
+  it("returns the slowest and the fastest fix", () => {
+    expect(speedRange([{ speed: 4 }, { speed: 0.5 }, { speed: 9 }])).toEqual({ min: 0.5, max: 9 })
+  })
+
+  it("counts a fix with no speed as still", () => {
+    // Otherwise an imported track with no speeds at all yields an inverted range
+    expect(speedRange([{ speed: 5 }, {}])).toEqual({ min: 0, max: 5 })
+  })
+
+  it("collapses an empty track to zero rather than to infinities", () => {
+    expect(speedRange([])).toEqual({ min: 0, max: 0 })
+  })
+})
+
+// ============================================================================
+// speedRampColor
+// ============================================================================
+
+describe("speedRampColor", () => {
+  it("is green at the slowest fix and red at the fastest, whatever the trip's own speeds are", () => {
+    expect(speedRampColor(0, 0, 30, colors)).toBe(colors.success)
+    expect(speedRampColor(30, 0, 30, colors)).toBe(colors.error)
+    // A walking trip fills the same ramp as a drive
+    expect(speedRampColor(1.2, 1.2, 2, colors)).toBe(colors.success)
+    expect(speedRampColor(2, 1.2, 2, colors)).toBe(colors.error)
+  })
+
+  it("interpolates on either side of the middle", () => {
+    const slowSide = speedRampColor(2.5, 0, 10, colors)
+    const fastSide = speedRampColor(7.5, 0, 10, colors)
+    for (const color of [slowSide, fastSide]) {
+      expect(color).toMatch(/^rgb\(\d+,\d+,\d+\)$/)
+      expect(color).not.toBe(colors.success)
+      expect(color).not.toBe(colors.error)
+    }
+  })
+
+  it("clamps a speed outside the range to its own end", () => {
+    expect(speedRampColor(-5, 0, 10, colors)).toBe(colors.success)
+    expect(speedRampColor(50, 0, 10, colors)).toBe(colors.error)
+  })
+
+  it("keeps one colour when every fix reads the same, instead of dividing by zero", () => {
+    expect(speedRampColor(3, 3, 3, colors)).toBe(colors.success)
   })
 })
 
