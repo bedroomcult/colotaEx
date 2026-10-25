@@ -1,0 +1,2 @@
+- Max speed in trip details with speed-based track coloring and legend
+- Fixed text showing only its top edge on Samsung DeX and other external displays
