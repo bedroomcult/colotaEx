@@ -6,7 +6,7 @@
 import React, { useMemo, useState, useCallback, useLayoutEffect, useEffect, useRef } from "react"
 import { View, Text, StyleSheet, ScrollView, useWindowDimensions } from "react-native"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
-import { Upload, Trash2, Route, Clock, Gauge, MapPin, TrendingUp, TrendingDown } from "lucide-react-native"
+import { Upload, Trash2, Route, Clock, Gauge, Zap, MapPin, TrendingUp, TrendingDown } from "lucide-react-native"
 import { useTheme } from "../hooks/useTheme"
 import { fontSizes, fonts } from "../styles/typography"
 // Deep paths on purpose: the components barrel re-exports DashboardMap, which reaches
@@ -19,6 +19,8 @@ import { StatRow } from "../components/ui/StatRow"
 import { StepperHeader } from "../components/ui/StepperHeader"
 import { HeaderAction } from "../components/ui/HeaderAction"
 import { TrackMap } from "../components/features/inspector/TrackMap"
+import { SpeedLegend } from "../components/features/inspector/SpeedLegend"
+import { speedRange } from "../components/features/map/mapUtils"
 import { TripSwatch } from "../components/features/inspector/TripRow"
 import { ExportFormatDialog } from "../components/ui/ExportFormatDialog"
 import { InspectorDock } from "../components/features/inspector/InspectorDock"
@@ -254,7 +256,8 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
   const speedProfile = useMemo(() => buildSpeedProfile(trip.locations, MAX_BARS), [trip])
   const elevationProfile = useMemo(() => buildElevationProfile(trip.locations, MAX_BARS), [trip])
 
-  const maxSpeed = useMemo(() => trip.locations.reduce((max, loc) => Math.max(max, loc.speed ?? 0), 0), [trip])
+  // The ramp the map draws is scaled to these two, and the legend names them
+  const speedBounds = useMemo(() => speedRange(trip.locations), [trip])
   const minElevation = useMemo(
     () => trip.locations.reduce((min, loc) => Math.min(min, loc.altitude ?? Infinity), Infinity),
     [trip]
@@ -299,6 +302,7 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
           locations={trip.locations}
           colors={colors}
           trackColor={tripColor}
+          colorMode="speed"
           fitVersion={trip.index}
           noteOverrides={noteOverrides}
           selectedPointId={selectedPointId}
@@ -308,6 +312,13 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
           controlsBottom={controlsBottom}
           controlsEnd={edgeEnd}
         />
+        {speedBounds.max > speedBounds.min && (
+          <SpeedLegend
+            minSpeed={speedBounds.min}
+            maxSpeed={speedBounds.max}
+            style={[styles.legend, { top: space.lg, left: edgeStart }]}
+          />
+        )}
         {selectedPoint && selectedPointId != null && (
           <InspectorDock
             content={{
@@ -334,6 +345,8 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
             <StatRow icon={Clock} label={t("tripDetail.duration")} value={formatDuration(duration)} />
             <Divider tight inset />
             <StatRow icon={Gauge} label={t("tripDetail.avgSpeed")} value={formatSpeed(stats.avgSpeed)} />
+            <Divider tight inset />
+            <StatRow icon={Zap} label={t("tripDetail.maxSpeedLabel")} value={formatSpeed(stats.maxSpeed)} />
             <Divider tight inset />
             <StatRow icon={MapPin} label={t("tripDetail.points")} value={String(trip.locationCount)} />
             {stats.elevationGain > 0 && (
@@ -365,7 +378,7 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
             <View style={styles.chartTitleRow}>
               <SectionTitle>{t("tripDetail.speed")}</SectionTitle>
               <Text style={[styles.chartRange, { color: colors.textSecondary }]}>
-                {t("tripDetail.maxSpeed", { value: formatSpeed(maxSpeed) })}
+                {t("tripDetail.maxSpeed", { value: formatSpeed(stats.maxSpeed) })}
               </Text>
             </View>
             <Card style={styles.chartCard}>
@@ -373,7 +386,7 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
                 accessibilityRole="image"
                 accessibilityLabel={t("tripDetail.speedChart", {
                   avg: formatSpeed(stats.avgSpeed),
-                  max: formatSpeed(maxSpeed)
+                  max: formatSpeed(stats.maxSpeed)
                 })}
               >
                 <InteractiveLineChart
@@ -446,6 +459,9 @@ const styles = StyleSheet.create({
     marginTop: space.md
   },
 
+  legend: {
+    position: "absolute"
+  },
   chartCard: {
     padding: space.md
   },

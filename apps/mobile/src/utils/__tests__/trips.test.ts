@@ -521,6 +521,32 @@ describe("computeTripStats", () => {
     expect(computeTripStats(locations).avgSpeed).toBe(0)
   })
 
+  it("reports the fastest fix the trip saw", () => {
+    const locations = [
+      { latitude: 52.52, longitude: 13.405, timestamp: 1000, speed: 4 },
+      { latitude: 52.53, longitude: 13.405, timestamp: 1010, speed: 12.5 },
+      { latitude: 52.54, longitude: 13.405, timestamp: 1020, speed: 7 }
+    ]
+    expect(computeTripStats(locations).maxSpeed).toBe(12.5)
+  })
+
+  it("ignores a fix that reports no speed instead of reading it as zero", () => {
+    // Imported tracks often carry no speed at all; a missing value must not win the comparison
+    const locations = [
+      { latitude: 52.52, longitude: 13.405, timestamp: 1000, speed: 6 },
+      { latitude: 52.53, longitude: 13.405, timestamp: 1010 }
+    ]
+    expect(computeTripStats(locations).maxSpeed).toBe(6)
+  })
+
+  it("reports no peak speed for a track that carries none", () => {
+    const locations = [
+      { latitude: 52.52, longitude: 13.405, timestamp: 1000 },
+      { latitude: 52.53, longitude: 13.405, timestamp: 1010 }
+    ]
+    expect(computeTripStats(locations).maxSpeed).toBe(0)
+  })
+
   it("rejects alternating altitude noise instead of counting it as climb", () => {
     // Noise alternating with the true value turns a steady 20m climb into a swing many times its
     // size, which the raw sum counted as ascent

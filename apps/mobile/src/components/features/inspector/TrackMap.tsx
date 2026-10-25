@@ -17,6 +17,8 @@ import {
   buildTrackSegmentsGeoJSON,
   buildTrackPointsGeoJSON,
   computeTrackBounds,
+  speedRange,
+  speedRampColor,
   TRACK_CASING_STYLE,
   TRACK_LINE_STYLE,
   type TrackLocation
@@ -56,6 +58,9 @@ interface Props {
   colors: ThemeColors
   trips?: Trip[]
   trackColor: string
+  /** `"speed"` ramps each fix from the trip's slowest to its fastest colour instead of colouring
+   *  by trip. Only meaningful where a single trip is drawn, since it gives up trip identity. */
+  colorMode?: "trip" | "speed"
   fitVersion?: number
   /** Notes saved this session, by id. Held by the parent because the tabs unmount this map. */
   noteOverrides?: Record<number, string | undefined>
@@ -75,6 +80,7 @@ export function TrackMap({
   colors,
   trips,
   trackColor,
+  colorMode = "trip",
   fitVersion,
   noteOverrides,
   selectedPointId,
@@ -197,10 +203,15 @@ export function TrackMap({
     return indices
   }, [tripIdByPoint])
 
+  // The line, its dots and the selection highlight all read this, so they never disagree
   const locationColors = useMemo(() => {
+    if (colorMode === "speed") {
+      const { min, max } = speedRange(locations)
+      return locations.map((loc) => speedRampColor(loc.speed ?? 0, min, max, colors))
+    }
     if (!tripIdByPoint || !trips) return locations.map(() => trackColor)
     return Array.from(tripIdByPoint, (tripId) => (tripId < 0 ? trackColor : getTripColor(trips[tripId].index)))
-  }, [tripIdByPoint, trips, locations, trackColor])
+  }, [colorMode, colors, tripIdByPoint, trips, locations, trackColor])
 
   const locationTrips = useMemo(() => {
     if (!tripIdByPoint || !trips) return undefined
