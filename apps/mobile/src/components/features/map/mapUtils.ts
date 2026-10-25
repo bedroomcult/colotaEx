@@ -52,6 +52,34 @@ export function getSpeedColor(speed: number, colors: ThemeColors): string {
   return lerpColor(colors.warning, colors.error, (speed - 5) / 3)
 }
 
+/**
+ * The slowest and fastest speed a set of fixes reports, for a ramp scaled to one trip. A fix with
+ * no speed counts as still, so imported tracks without speeds collapse to a single colour.
+ */
+export function speedRange(locations: ArrayLike<{ speed?: number }>): { min: number; max: number } {
+  let min = Infinity
+  let max = -Infinity
+  for (let i = 0; i < locations.length; i++) {
+    const speed = locations[i].speed ?? 0
+    if (speed < min) min = speed
+    if (speed > max) max = speed
+  }
+  return min <= max ? { min, max } : { min: 0, max: 0 }
+}
+
+/**
+ * Colour along a ramp scaled to this trip's own range rather than absolute thresholds, so a walk
+ * and a drive both show contrast. The slowest fixes are green and the fastest red.
+ */
+export function speedRampColor(speed: number, min: number, max: number, colors: ThemeColors): string {
+  if (!(max > min) || speed <= min) return colors.success
+  if (speed >= max) return colors.error
+  const t = (speed - min) / (max - min)
+  return t <= 0.5
+    ? lerpColor(colors.success, colors.warning, t * 2)
+    : lerpColor(colors.warning, colors.error, (t - 0.5) * 2)
+}
+
 // ============================================================================
 // GEOGRAPHIC CIRCLE POLYGON
 // ============================================================================
