@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name" translatable="false">Colota</string>
+    <string name="app_name" translatable="false">ColotaEx</string>
     <string name="shortcut_start_short">开始</string>
     <string name="shortcut_start_long">开始跟踪</string>
     <string name="shortcut_stop_short">停止</string>
@@ -56,8 +56,8 @@
     <string name="stop_reason_automation">通过自动化 intent 停止</string>
     <string name="stop_reason_other">已停止</string>
 
-    <string name="toast_tracking_started">Colota 已开始跟踪</string>
-    <string name="toast_tracking_stopped">Colota 已停止跟踪</string>
+    <string name="toast_tracking_started">ColotaEx 已开始跟踪</string>
+    <string name="toast_tracking_stopped">ColotaEx 已停止跟踪</string>
 
     <string name="auto_export_title">自动导出</string>
     <string name="auto_export_running">正在导出位置数据...</string>
@@ -75,7 +75,7 @@
     <string name="auto_export_save_failed">无法保存导出文件，将重试。</string>
     <string name="auto_export_gave_up">多次尝试后导出仍失败，请检查设置。</string>
 
-    <string name="backup_title">Colota 备份</string>
+    <string name="backup_title">ColotaEx 备份</string>
     <string name="backup_working">处理中...</string>
     <string name="backup_encrypting">正在加密备份...</string>
     <string name="backup_restoring">正在恢复备份...</string>

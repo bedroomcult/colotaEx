@@ -244,7 +244,7 @@ describe("TrackingProfilesScreen", () => {
 
       fireEvent.press(headerRight().getByLabelText("Share all profiles"))
 
-      await waitFor(() => expect(shareSpy).toHaveBeenCalledWith({ message: expect.stringContaining("colota://setup") }))
+      await waitFor(() => expect(shareSpy).toHaveBeenCalledWith({ message: expect.stringContaining("colotaex://setup") }))
       const link: string = shareSpy.mock.calls[0][0].message as string
       expect(decodeURIComponent(link.split("config=")[1])).not.toMatch(/"id"/)
       shareSpy.mockRestore()

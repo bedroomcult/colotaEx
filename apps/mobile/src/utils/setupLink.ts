@@ -83,7 +83,7 @@ export function buildSetupConfig(parts: SetupShareParts, sel: SetupShareSelectio
   return config
 }
 
-/** Builds the full `colota://setup?config=...` deep link for the selected categories. */
+/** Builds the full `colotaex://setup?config=...` deep link for the selected categories. */
 export function buildSetupLink(parts: SetupShareParts, sel: SetupShareSelection): string {
   return encode(buildSetupConfig(parts, sel))
 }
@@ -108,7 +108,7 @@ function stripProfile({ id: _id, createdAt: _createdAt, ...rest }: TrackingProfi
 }
 
 function encode(config: Record<string, unknown>): string {
-  return `colota://setup?config=${encodeConfig(config)}`
+  return `colotaex://setup?config=${encodeConfig(config)}`
 }
 
 export function encodeConfig(config: unknown): string {

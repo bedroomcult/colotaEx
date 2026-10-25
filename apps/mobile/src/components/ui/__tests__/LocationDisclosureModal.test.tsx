@@ -27,7 +27,7 @@ describe("LocationDisclosureModal", () => {
     expect(getByText("Location data collection")).toBeTruthy()
     expect(getByText("Agree")).toBeTruthy()
     const text = JSON.stringify(toJSON())
-    const first = text.indexOf("Colota collects location data to enable GPS tracking")
+    const first = text.indexOf("ColotaEx collects location data to enable GPS tracking")
     const second = text.indexOf("This data is sent only to the server you set up.")
     const third = text.indexOf("While tracking runs, a persistent notification shows its status.")
     expect(first).toBeGreaterThan(-1)

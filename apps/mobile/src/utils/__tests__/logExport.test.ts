@@ -53,10 +53,10 @@ describe("getMergedLogs", () => {
 
   it("merges native logcat entries with level extraction", async () => {
     mockGetNativeLogs.mockResolvedValue([
-      "03-31 10:00:02.000  1234  5678 D Colota.Service: Location received",
-      "03-31 10:00:03.000  1234  5678 E Colota.Sync: Network error",
-      "03-31 10:00:04.000  1234  5678 W Colota.Boot: Slow start",
-      "03-31 10:00:05.000  1234  5678 I Colota.Profile: Switched"
+      "03-31 10:00:02.000  1234  5678 D ColotaEx.Service: Location received",
+      "03-31 10:00:03.000  1234  5678 E ColotaEx.Sync: Network error",
+      "03-31 10:00:04.000  1234  5678 W ColotaEx.Boot: Slow start",
+      "03-31 10:00:05.000  1234  5678 I ColotaEx.Profile: Switched"
     ])
 
     const result = await getMergedLogs()
@@ -95,8 +95,8 @@ describe("getMergedLogs", () => {
       { timestamp: `${year}-03-31T12:00:00.000Z`, level: "INFO", message: "js middle" }
     ])
     mockGetNativeLogs.mockResolvedValue([
-      "03-31 06:00:00.000  1234  5678 D Colota.Service: native first",
-      "03-31 23:00:00.000  1234  5678 I Colota.Service: native last"
+      "03-31 06:00:00.000  1234  5678 D ColotaEx.Service: native first",
+      "03-31 23:00:00.000  1234  5678 I ColotaEx.Service: native last"
     ])
 
     const result = await getMergedLogs()
@@ -107,7 +107,7 @@ describe("getMergedLogs", () => {
     expect(result[1].message).toBe("js middle")
     expect(result[2].message).toContain("native last")
     // The stamp, pid, tid and level are stripped, so a search matches a JS line the same way.
-    expect(result[0].message).toBe("Colota.Service: native first")
+    expect(result[0].message).toBe("ColotaEx.Service: native first")
   })
 
   it("handles native log fetch failure gracefully", async () => {
@@ -127,8 +127,8 @@ describe("getMergedLogs", () => {
   it("gives a continuation the time and level of the line it belongs to", async () => {
     mockGetNativeLogs.mockResolvedValue([
       "2026-03-31 10:00:03.000 ERROR/Sync: Network error",
-      "\tat com.Colota.sync.NetworkManager.run(NetworkManager.kt:88)",
-      "\tat com.Colota.sync.SyncManager.flush(SyncManager.kt:214)"
+      "\tat com.colotaex.sync.NetworkManager.run(NetworkManager.kt:88)",
+      "\tat com.colotaex.sync.SyncManager.flush(SyncManager.kt:214)"
     ])
 
     const result = await getMergedLogs()
@@ -161,11 +161,11 @@ describe("getMergedLogs", () => {
   })
 
   it("formats raw line correctly for native entries", async () => {
-    mockGetNativeLogs.mockResolvedValue(["03-31 10:00:00.000  1234  5678 D Colota.Tag: msg"])
+    mockGetNativeLogs.mockResolvedValue(["03-31 10:00:00.000  1234  5678 D ColotaEx.Tag: msg"])
 
     const result = await getMergedLogs()
 
-    expect(result[0].raw).toBe("[NATIVE] 03-31 10:00:00.000  1234  5678 D Colota.Tag: msg")
+    expect(result[0].raw).toBe("[NATIVE] 03-31 10:00:00.000  1234  5678 D ColotaEx.Tag: msg")
   })
 })
 
@@ -180,7 +180,7 @@ describe("buildExportHeader", () => {
       Date.parse("2026-09-09T14:22:07.000Z")
     )
 
-    expect(header).toContain("=== Colota log export ===")
+    expect(header).toContain("=== ColotaEx log export ===")
     expect(header).toContain("App: 1.16.0 (48) gms")
     expect(header).toContain("Android: 15 (API 35)")
     expect(header).toContain("Device: Google Pixel 8")
@@ -193,7 +193,7 @@ describe("buildExportHeader", () => {
   })
 
   it("still writes a header when neither block could be read", () => {
-    expect(buildExportHeader(null, null, 0, Date.now())).toContain("=== Colota log export ===")
+    expect(buildExportHeader(null, null, 0, Date.now())).toContain("=== ColotaEx log export ===")
   })
 })
 

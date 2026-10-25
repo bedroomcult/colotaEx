@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name" translatable="false">Colota</string>
+    <string name="app_name" translatable="false">ColotaEx</string>
     <string name="shortcut_start_short">Iniciar</string>
     <string name="shortcut_start_long">Iniciar seguimiento</string>
     <string name="shortcut_stop_short">Detener</string>
@@ -56,8 +56,8 @@
     <string name="stop_reason_automation">Detenido por un intent de automatización</string>
     <string name="stop_reason_other">Detenido</string>
 
-    <string name="toast_tracking_started">Seguimiento de Colota iniciado</string>
-    <string name="toast_tracking_stopped">Seguimiento de Colota detenido</string>
+    <string name="toast_tracking_started">Seguimiento de ColotaEx iniciado</string>
+    <string name="toast_tracking_stopped">Seguimiento de ColotaEx detenido</string>
 
     <string name="auto_export_title">Exportación automática</string>
     <string name="auto_export_running">Exportando datos de ubicación...</string>
@@ -75,7 +75,7 @@
     <string name="auto_export_save_failed">No se pudo guardar el archivo de exportación. Se reintentará.</string>
     <string name="auto_export_gave_up">La exportación falló tras varios intentos. Revisa tu configuración.</string>
 
-    <string name="backup_title">Copia de seguridad de Colota</string>
+    <string name="backup_title">Copia de seguridad de ColotaEx</string>
     <string name="backup_working">Trabajando...</string>
     <string name="backup_encrypting">Cifrando la copia de seguridad...</string>
     <string name="backup_restoring">Restaurando la copia de seguridad...</string>

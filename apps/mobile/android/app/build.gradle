@@ -89,9 +89,9 @@ android {
         includeInBundle = false
     }
 
-    namespace "com.Colota"
+    namespace "com.colotaex"
     defaultConfig {
-        applicationId "com.Colota"
+        applicationId "com.colotaex"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 55

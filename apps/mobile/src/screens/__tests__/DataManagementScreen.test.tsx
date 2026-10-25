@@ -604,7 +604,7 @@ describe("DataManagementScreen", () => {
         })
       })
 
-      const line = await api.findByText("Sent 9 of 412. Your server asked Colota to wait. Uploads resume in 2 min.")
+      const line = await api.findByText("Sent 9 of 412. Your server asked ColotaEx to wait. Uploads resume in 2 min.")
       expect(line.props.accessibilityValue.text).toBe("warning")
       expect(api.queryByText(/press again/)).toBeNull()
     })
@@ -625,7 +625,7 @@ describe("DataManagementScreen", () => {
         })
       })
 
-      expect(await api.findByText("Your server asked Colota to wait. Uploads resume in 45 s.")).toBeTruthy()
+      expect(await api.findByText("Your server asked ColotaEx to wait. Uploads resume in 45 s.")).toBeTruthy()
     })
 
     it("rounds a wait of a minute or more up to whole minutes", async () => {
@@ -644,7 +644,7 @@ describe("DataManagementScreen", () => {
         })
       })
 
-      expect(await api.findByText("Your server asked Colota to wait. Uploads resume in 15 min.")).toBeTruthy()
+      expect(await api.findByText("Your server asked ColotaEx to wait. Uploads resume in 15 min.")).toBeTruthy()
     })
 
     it("says how many are left when a pass hits the batch cap", async () => {

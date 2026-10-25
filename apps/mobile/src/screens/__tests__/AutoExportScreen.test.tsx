@@ -45,7 +45,7 @@ const mockGetAutoExportStatus = jest.fn().mockResolvedValue({
   timeOfDay: "00:00",
   weeklyDow: 1,
   monthlyDom: 1,
-  filenameTemplate: "colota_export_{date}_{time}",
+  filenameTemplate: "colotaex_export_{date}_{time}",
   deviceModel: "Pixel 7"
 })
 const mockSaveSetting = jest.fn().mockResolvedValue(undefined)
@@ -261,7 +261,7 @@ describe("AutoExportScreen", () => {
       timeOfDay: "00:00",
       weeklyDow: 1,
       monthlyDom: 1,
-      filenameTemplate: "colota_export_{date}_{time}",
+      filenameTemplate: "colotaex_export_{date}_{time}",
       deviceModel: "Pixel 7"
     })
     mockGetExportFiles.mockResolvedValue([])
@@ -529,7 +529,7 @@ describe("AutoExportScreen", () => {
     const { getByTestId, getByText } = render(<AutoExportScreen {...mockProps} />)
 
     await waitFor(() => {
-      expect(getByText("0 keeps every file. Counts the Colota exports in the chosen folder.")).toBeTruthy()
+      expect(getByText("0 keeps every file. Counts the ColotaEx exports in the chosen folder.")).toBeTruthy()
     })
 
     const input = getByTestId("numeric-input-Files to keep")
@@ -545,15 +545,15 @@ describe("AutoExportScreen", () => {
     const { getByDisplayValue } = render(<AutoExportScreen {...mockProps} />)
 
     await waitFor(() => {
-      expect(getByDisplayValue("colota_export_{date}_{time}")).toBeTruthy()
+      expect(getByDisplayValue("colotaex_export_{date}_{time}")).toBeTruthy()
     })
 
-    const input = getByDisplayValue("colota_export_{date}_{time}")
-    fireEvent.changeText(input, "{device}_colota_export-{date}_{time}")
+    const input = getByDisplayValue("colotaex_export_{date}_{time}")
+    fireEvent.changeText(input, "{device}_colotaex_export-{date}_{time}")
     fireEvent(input, "blur")
 
     await waitFor(() => {
-      expect(mockSaveSetting).toHaveBeenCalledWith("autoExportFilenameTemplate", "{device}_colota_export-{date}_{time}")
+      expect(mockSaveSetting).toHaveBeenCalledWith("autoExportFilenameTemplate", "{device}_colotaex_export-{date}_{time}")
     })
   })
 
@@ -561,10 +561,10 @@ describe("AutoExportScreen", () => {
     const { getByDisplayValue } = render(<AutoExportScreen {...mockProps} />)
 
     await waitFor(() => {
-      expect(getByDisplayValue("colota_export_{date}_{time}")).toBeTruthy()
+      expect(getByDisplayValue("colotaex_export_{date}_{time}")).toBeTruthy()
     })
 
-    const input = getByDisplayValue("colota_export_{date}_{time}")
+    const input = getByDisplayValue("colotaex_export_{date}_{time}")
     fireEvent.changeText(input, "backup_{date}_{time}")
     fireEvent(input, "blur")
 
@@ -572,24 +572,24 @@ describe("AutoExportScreen", () => {
       expect(mockShowAlert).toHaveBeenCalledWith("Invalid Template", expect.any(String), "warning")
     })
     expect(mockSaveSetting).not.toHaveBeenCalledWith("autoExportFilenameTemplate", "backup_{date}_{time}")
-    expect(getByDisplayValue("colota_export_{date}_{time}")).toBeTruthy()
+    expect(getByDisplayValue("colotaex_export_{date}_{time}")).toBeTruthy()
   })
 
   it("rejects a filename template missing the time token", async () => {
     const { getByDisplayValue } = render(<AutoExportScreen {...mockProps} />)
 
     await waitFor(() => {
-      expect(getByDisplayValue("colota_export_{date}_{time}")).toBeTruthy()
+      expect(getByDisplayValue("colotaex_export_{date}_{time}")).toBeTruthy()
     })
 
-    const input = getByDisplayValue("colota_export_{date}_{time}")
-    fireEvent.changeText(input, "colota_export_{date}")
+    const input = getByDisplayValue("colotaex_export_{date}_{time}")
+    fireEvent.changeText(input, "colotaex_export_{date}")
     fireEvent(input, "blur")
 
     await waitFor(() => {
       expect(mockShowAlert).toHaveBeenCalledWith("Invalid Template", expect.any(String), "warning")
     })
-    expect(mockSaveSetting).not.toHaveBeenCalledWith("autoExportFilenameTemplate", "colota_export_{date}")
+    expect(mockSaveSetting).not.toHaveBeenCalledWith("autoExportFilenameTemplate", "colotaex_export_{date}")
   })
 
   it("previews the filename the exporter will actually write", async () => {
@@ -599,7 +599,7 @@ describe("AutoExportScreen", () => {
       const { getByText } = render(<AutoExportScreen {...mockProps} />)
 
       await waitFor(() => {
-        expect(getByText("Preview: colota_export_2026-05-20_0815.geojson")).toBeTruthy()
+        expect(getByText("Preview: colotaex_export_2026-05-20_0815.geojson")).toBeTruthy()
       })
     } finally {
       jest.useRealTimers()
@@ -623,7 +623,7 @@ describe("AutoExportScreen", () => {
       timeOfDay: "00:00",
       weeklyDow: 1,
       monthlyDom: 1,
-      filenameTemplate: "{device}_colota_export-{date}_{time}",
+      filenameTemplate: "{device}_colotaex_export-{date}_{time}",
       deviceModel: "Pixel 7"
     })
 
@@ -798,7 +798,7 @@ describe("AutoExportScreen", () => {
       nextExportTimestamp: 1700086400,
       fileCount: 3,
       retentionCount: 10,
-      lastFileName: "colota_export_2026-03-10_1200.geojson",
+      lastFileName: "colotaex_export_2026-03-10_1200.geojson",
       lastRowCount: 42,
       lastError: null
     })
@@ -807,7 +807,7 @@ describe("AutoExportScreen", () => {
 
     await waitFor(() => {
       expect(getByText("Last file")).toBeTruthy()
-      expect(getByText("colota_export_2026-03-10_1200.geojson")).toBeTruthy()
+      expect(getByText("colotaex_export_2026-03-10_1200.geojson")).toBeTruthy()
       expect(getByText("Locations exported")).toBeTruthy()
       expect(getByText("42")).toBeTruthy()
     })
@@ -838,16 +838,16 @@ describe("AutoExportScreen", () => {
 
   it("renders export history with file list", async () => {
     mockGetExportFiles.mockResolvedValue([
-      { name: "colota_export_2026-03-10.geojson", size: 1024, lastModified: 1700000000, uri: "content://file1" },
-      { name: "colota_export_2026-03-09.geojson", size: 2048, lastModified: 1699913600, uri: "content://file2" }
+      { name: "colotaex_export_2026-03-10.geojson", size: 1024, lastModified: 1700000000, uri: "content://file1" },
+      { name: "colotaex_export_2026-03-09.geojson", size: 2048, lastModified: 1699913600, uri: "content://file2" }
     ])
 
     const { getByText } = render(<AutoExportScreen {...mockProps} />)
 
     await waitFor(() => {
       expect(getByText("Export history")).toBeTruthy()
-      expect(getByText("colota_export_2026-03-10.geojson")).toBeTruthy()
-      expect(getByText("colota_export_2026-03-09.geojson")).toBeTruthy()
+      expect(getByText("colotaex_export_2026-03-10.geojson")).toBeTruthy()
+      expect(getByText("colotaex_export_2026-03-09.geojson")).toBeTruthy()
     })
   })
 
@@ -871,7 +871,7 @@ describe("AutoExportScreen", () => {
     await act(async () => {
       DeviceEventEmitter.emit("onAutoExportComplete", {
         success: true,
-        fileName: "colota_export_2026-03-10.csv",
+        fileName: "colotaex_export_2026-03-10.csv",
         rowCount: 100,
         error: null
       })
@@ -880,7 +880,7 @@ describe("AutoExportScreen", () => {
     await waitFor(() => {
       expect(mockShowAlert).toHaveBeenCalledWith(
         "Export Complete",
-        "Exported 100 locations to colota_export_2026-03-10.csv",
+        "Exported 100 locations to colotaex_export_2026-03-10.csv",
         "success"
       )
     })
@@ -1085,12 +1085,12 @@ describe("AutoExportScreen", () => {
   }
 
   it("words a one-row export in the singular", async () => {
-    await renderAndEmit({ success: true, fileName: "colota_export_2026-03-10.csv", rowCount: 1, error: null })
+    await renderAndEmit({ success: true, fileName: "colotaex_export_2026-03-10.csv", rowCount: 1, error: null })
 
     await waitFor(() =>
       expect(mockShowAlert).toHaveBeenCalledWith(
         "Export Complete",
-        "Exported 1 location to colota_export_2026-03-10.csv",
+        "Exported 1 location to colotaex_export_2026-03-10.csv",
         "success"
       )
     )

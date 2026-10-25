@@ -149,7 +149,7 @@ const SCREEN_CONFIG: readonly ScreenConfig[] = [
     titleKey: "screen.bluetoothDevice"
   },
   {
-    name: "About Colota",
+    name: "About ColotaEx",
     component: AboutScreen,
     titleKey: "screen.aboutColota"
   },
@@ -269,7 +269,7 @@ function AppNavigator() {
   )
   const linking = useMemo(
     () => ({
-      prefixes: ["colota://"],
+      prefixes: ["colotaex://"],
       config: {
         screens: {
           "Setup Import": "setup"

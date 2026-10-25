@@ -224,7 +224,7 @@ export const API_TEMPLATES: Record<Exclude<ApiTemplateName, "custom">, ApiTempla
       tst: "timestamp",
       bear: "bearing"
     },
-    customFields: [{ key: "useragent", value: "Colota" }]
+    customFields: [{ key: "useragent", value: "ColotaEx" }]
   },
   reitti: {
     name: "reitti",

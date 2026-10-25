@@ -45,7 +45,7 @@ jest.mock("../../components", () => {
 
 import { AboutScreen } from "../AboutScreen"
 
-const COPYRIGHT = /Copyright © 2026 Max Dietrich and contributors\. Colota is free software, with no warranty/
+const COPYRIGHT = /Copyright © 2026 Max Dietrich and contributors. ColotaEx is free software, with no warranty/
 
 const renderScreen = () => render(<AboutScreen navigation={{} as any} />)
 
@@ -61,7 +61,7 @@ describe("AboutScreen", () => {
   it("prints the app's name and the version line with the build code the changelog files are keyed by", () => {
     const api = renderScreen()
 
-    expect(api.getByText("Colota")).toBeTruthy()
+    expect(api.getByText("ColotaEx")).toBeTruthy()
     expect(api.getByText("Version 1.3.0 (10) · FOSS")).toBeTruthy()
   })
 
@@ -81,15 +81,15 @@ describe("AboutScreen", () => {
     const api = renderScreen()
 
     fireEvent.press(api.getByTestId("nav-privacy-policy"))
-    expect(Linking.openURL).toHaveBeenLastCalledWith("https://colota.app/privacy-policy")
+    expect(Linking.openURL).toHaveBeenLastCalledWith("https://github.com/bedroomcult/colotaEx/blob/main/apps/docs/src/pages/privacy-policy.md")
     fireEvent.press(api.getByTestId("nav-license"))
-    expect(Linking.openURL).toHaveBeenLastCalledWith("https://github.com/dietrichmax/colota/blob/main/LICENSE")
+    expect(Linking.openURL).toHaveBeenLastCalledWith("https://github.com/bedroomcult/colotaEx/blob/main/LICENSE")
     fireEvent.press(api.getByTestId("nav-source-code"))
-    expect(Linking.openURL).toHaveBeenLastCalledWith("https://github.com/dietrichmax/colota")
+    expect(Linking.openURL).toHaveBeenLastCalledWith("https://github.com/bedroomcult/colotaEx")
 
-    expect(api.getByText("colota.app/privacy-policy")).toBeTruthy()
+    expect(api.getByText("github.com/bedroomcult/colotaEx", { exact: false })).toBeTruthy()
     expect(api.getByText("GNU AGPLv3")).toBeTruthy()
-    expect(api.getByText("github.com/dietrichmax/colota")).toBeTruthy()
+    expect(api.getByText("github.com/bedroomcult/colotaEx")).toBeTruthy()
     expect(await api.findAllByRole("link")).toHaveLength(3)
     expect(api.queryAllByRole("button")).toHaveLength(0)
   })

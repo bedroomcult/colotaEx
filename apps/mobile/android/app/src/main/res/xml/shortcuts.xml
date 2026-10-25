@@ -8,9 +8,9 @@
         android:shortcutShortLabel="@string/shortcut_start_short"
         android:shortcutLongLabel="@string/shortcut_start_long">
         <intent
-            android:action="com.Colota.ACTION_SHORTCUT_START"
-            android:targetPackage="com.Colota"
-            android:targetClass="com.Colota.triggers.ShortcutHandlerActivity" />
+            android:action="com.colotaex.ACTION_SHORTCUT_START"
+            android:targetPackage="com.colotaex"
+            android:targetClass="com.colotaex.triggers.ShortcutHandlerActivity" />
         <categories android:name="android.shortcut.conversation" />
     </shortcut>
 
@@ -21,9 +21,9 @@
         android:shortcutShortLabel="@string/shortcut_stop_short"
         android:shortcutLongLabel="@string/shortcut_stop_long">
         <intent
-            android:action="com.Colota.ACTION_SHORTCUT_STOP"
-            android:targetPackage="com.Colota"
-            android:targetClass="com.Colota.triggers.ShortcutHandlerActivity" />
+            android:action="com.colotaex.ACTION_SHORTCUT_STOP"
+            android:targetPackage="com.colotaex"
+            android:targetClass="com.colotaex.triggers.ShortcutHandlerActivity" />
         <categories android:name="android.shortcut.conversation" />
     </shortcut>
 

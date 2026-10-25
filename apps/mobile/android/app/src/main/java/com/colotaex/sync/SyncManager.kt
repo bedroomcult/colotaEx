@@ -1,0 +1,398 @@
+/**
+ * Copyright (C) 2026 Max Dietrich
+ * Licensed under the GNU AGPLv3. See LICENSE in the project root for details.
+ */
+
+package com.colotaex.sync
+
+import com.colotaex.util.AppLogger
+import com.colotaex.bridge.LocationServiceModule
+import com.colotaex.data.DatabaseHelper
+import com.colotaex.util.TimedCache
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
+import com.colotaex.sync.http.NetworkManager
+import com.colotaex.sync.http.BatchResult
+import com.colotaex.network.NetworkMonitor
+
+/**
+ * Two sync modes: instant (syncInterval=0) sends each location on arrival,
+ * periodic (syncInterval>0) batches uploads at the configured interval.
+ */
+class SyncManager(
+    private val dbHelper: DatabaseHelper,
+    private val networkManager: NetworkManager,
+    private val networkMonitor: NetworkMonitor,
+    private val scope: CoroutineScope,
+    private val clock: () -> Long = System::currentTimeMillis
+) {
+    companion object {
+        private const val TAG = "SyncManager"
+        private const val MAX_BATCHES_PER_SYNC = 10
+    }
+
+    private val batchSender = OverlandBatchSender(dbHelper, networkManager, ::noteRateLimit)
+    private val pointSender = PointSender(dbHelper, networkManager, ::noteRateLimit)
+    private val schedule = SyncSchedule(clock)
+
+    @Volatile private var endpoint: String = ""
+    @Volatile private var syncIntervalSeconds: Int = 0
+    @Volatile private var retryIntervalSeconds: Int = 300
+    @Volatile private var isOfflineMode: Boolean = false
+    @Volatile private var syncCondition: String = "any"
+    @Volatile private var syncSsid: String = ""
+    @Volatile private var authHeaders: Map<String, String> = emptyMap()
+    @Volatile private var httpMethod: String = "POST"
+    @Volatile private var apiFormat: ApiFormat = ApiFormat.FIELD_MAPPED
+    @Volatile private var overlandBatchSize: Int = 50
+
+    private var syncJob: Job? = null
+    @Volatile var lastSuccessfulSyncTime: Long = 0
+        private set
+
+    private fun markSuccess() {
+        val now = System.currentTimeMillis()
+        lastSuccessfulSyncTime = now
+        SyncState.recordSuccess(now)
+    }
+    @Volatile private var consecutiveFailures = 0
+
+    private val queueCountCache = TimedCache(5000L) { dbHelper.getQueuedCount() }
+
+    /** One pass at a time: two passes fetch the same oldest rows and post each of them twice. */
+    private val syncMutex = Mutex()
+
+    /** Set while a manual flush waits on [syncMutex]; the running pass reports to its screen, which gives up on silence. */
+    @Volatile private var waitingFlushTotal: Int? = null
+
+    /** Queue rows an instant send is posting; a pass skips them instead of posting them a second time. */
+    private val instantInFlight: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+
+    private val intervalChanged = Channel<Unit>(Channel.CONFLATED)
+
+    fun updateConfig(
+        endpoint: String,
+        syncIntervalSeconds: Int,
+        retryIntervalSeconds: Int,
+        isOfflineMode: Boolean,
+        syncCondition: String,
+        syncSsid: String,
+        authHeaders: Map<String, String>,
+        httpMethod: String = "POST",
+        apiFormat: ApiFormat = ApiFormat.FIELD_MAPPED,
+        overlandBatchSize: Int = 50,
+    ) {
+        this.endpoint = endpoint
+        val intervalDiffers = syncIntervalSeconds != this.syncIntervalSeconds
+        this.syncIntervalSeconds = syncIntervalSeconds
+        if (intervalDiffers) intervalChanged.trySend(Unit)
+        this.retryIntervalSeconds = retryIntervalSeconds
+        this.isOfflineMode = isOfflineMode
+        this.syncCondition = syncCondition
+        this.syncSsid = syncSsid
+        this.authHeaders = authHeaders
+        this.httpMethod = httpMethod
+        this.apiFormat = apiFormat
+        this.overlandBatchSize = overlandBatchSize.coerceIn(1, 500)
+    }
+
+    fun startPeriodicSync() {
+        AppLogger.d(TAG, "Starting periodic sync: interval=${syncIntervalSeconds}s, endpoint=${if (endpoint.isBlank()) "NONE" else AppLogger.maskSensitiveUrlValues(endpoint)}")
+        syncJob = scope.launch {
+            var resumingWait = false
+            while (isActive) {
+                val baseDelay = calculateNextSyncDelay(resumingWait)
+                resumingWait = withTimeoutOrNull(baseDelay * 1000L) { intervalChanged.receive() } != null
+                if (resumingWait) continue
+
+                val queued = getCachedQueuedCount()
+                val allowed = isSyncAllowed()
+                // Instant mode idles every 30 s; only a periodic tick or a stuck queue is worth a line
+                if (syncIntervalSeconds > 0 || queued > 0) {
+                    AppLogger.d(TAG, "Sync tick: queue=$queued allowed=$allowed" + if (endpoint.isBlank()) " endpoint=NONE" else "")
+                }
+                if (!allowed) {
+                    continue
+                }
+                val rateLimitWait = rateLimitWaitSeconds()
+                if (rateLimitWait > 0) {
+                    AppLogger.d(TAG, "Sync skipped: rate limited for ${rateLimitWait}s")
+                    continue
+                }
+
+                if (endpoint.isNotBlank() && queued > 0) {
+                    if (syncMutex.isLocked) AppLogger.d(TAG, "Sync tick waiting for the running sync")
+                    val errorMessage: String? = syncMutex.withLock {
+                        try {
+                            val success = performSyncAndCheckSuccess()
+
+                            if (success) {
+                                if (consecutiveFailures > 0) {
+                                    AppLogger.i(TAG, "Sync restored")
+                                }
+                                consecutiveFailures = 0
+                                null
+                            } else {
+                                "Sync failed"
+                            }
+                        } catch (e: Exception) {
+                            AppLogger.e(TAG, "Sync error", e)
+                            e.message ?: "Sync error"
+                        }
+                    }
+
+                    if (errorMessage != null) {
+                        consecutiveFailures++
+                        if (consecutiveFailures >= 3) {
+                            SyncState.recordError(AppLogger.maskSensitiveUrlValues(errorMessage))
+                            LocationServiceModule.sendSyncErrorEvent(
+                                "$errorMessage ($consecutiveFailures consecutive failures)",
+                                getCachedQueuedCount()
+                            )
+                        }
+                        applyBackoffDelay()
+                    }
+                }
+            }
+        }
+    }
+
+    fun stopPeriodicSync() {
+        syncJob?.cancel()
+        syncJob = null
+        AppLogger.d(TAG, "Periodic sync stopped")
+    }
+
+    suspend fun manualFlush() {
+        if (endpoint.isBlank()) return
+        if (syncMutex.isLocked) AppLogger.d(TAG, "Manual flush waiting for the running sync")
+        waitingFlushTotal = dbHelper.getQueuedCount()
+        var total = 0
+        var pass = SyncPass(0, 0)
+        try {
+            syncMutex.withLock {
+                waitingFlushTotal = null
+                total = dbHelper.getQueuedCount()
+                val rateLimitWait = rateLimitWaitSeconds()
+                if (rateLimitWait > 0) {
+                    AppLogger.d(TAG, "Manual flush skipped: rate limited for ${rateLimitWait}s")
+                } else {
+                    AppLogger.d(TAG, "Manual flush started: $total items in queue")
+                    pass = syncQueue { sent, failed -> LocationServiceModule.sendSyncProgressEvent(sent, failed, total) }
+                }
+            }
+        } finally {
+            waitingFlushTotal = null
+            // Only this event ends the pass for the screen, so it goes out even after a throw or a cancel while waiting
+            invalidateQueueCache()
+            val remaining = runCatching { dbHelper.getQueuedCount() }.getOrDefault(total - pass.sent)
+            LocationServiceModule.sendSyncProgressEvent(
+                pass.sent, pass.failed, pass.sent + pass.failed, remaining, rateLimitWaitSeconds().takeIf { it > 0 }
+            )
+        }
+    }
+
+    suspend fun queueAndSend(locationId: Long, payload: JSONObject, bypassInterval: Boolean = false) {
+        if (isOfflineMode) {
+            AppLogger.d(TAG, "Skipping queue for location $locationId - offline mode")
+            return
+        }
+
+        val queueId = dbHelper.addToQueue(locationId, payload.toString())
+
+        invalidateQueueCache()
+
+        if (endpoint.isBlank()) {
+            AppLogger.d(TAG, "Queued location $locationId - no endpoint configured")
+            return
+        }
+
+        if ((syncIntervalSeconds == 0 || bypassInterval) && isSyncAllowed()) {
+            // Registered before the lock check: a later pass skips this row, a running one may already hold it
+            instantInFlight.add(queueId)
+            try {
+                if (syncMutex.isLocked) {
+                    AppLogger.d(TAG, "Instant send deferred: a sync is running")
+                    return
+                }
+                if (rateLimitWaitSeconds() > 0) {
+                    AppLogger.d(TAG, "Instant send deferred: rate limited")
+                    return
+                }
+                AppLogger.d(TAG, "Instant send")
+                val result = networkManager.sendToEndpoint(payload, endpoint, authHeaders, httpMethod, apiFormat)
+
+                if (result == BatchResult.Success) {
+                    dbHelper.markLocationsSent(listOf(locationId))
+                    dbHelper.removeFromQueueByLocationId(locationId)
+                    invalidateQueueCache()
+                    markSuccess()
+                } else {
+                    if (result is BatchResult.RateLimited) noteRateLimit(result.retryAfterSeconds)
+                    retryReason(result)?.let { dbHelper.incrementRetryCount(queueId, it) }
+                }
+            } finally {
+                instantInFlight.remove(queueId)
+            }
+        }
+    }
+
+    fun isSyncAllowed(): Boolean {
+        if (isOfflineMode || !networkMonitor.isNetworkAvailable()) return false
+        val allowed = when (syncCondition) {
+            "wifi_any" -> networkMonitor.isUnmeteredConnection()
+            "wifi_ssid" -> networkMonitor.isConnectedToSsid(syncSsid)
+            "vpn" -> networkMonitor.isVpnConnected()
+            else -> true // "any"
+        }
+        if (!allowed && syncCondition != "any") {
+            AppLogger.d(TAG, "Sync skipped: condition=$syncCondition not met")
+        }
+        return allowed
+    }
+
+    fun getCachedQueuedCount(): Int = queueCountCache.get()
+
+    fun invalidateQueueCache() = queueCountCache.invalidate()
+
+    private suspend fun performSyncAndCheckSuccess(): Boolean {
+        val countBefore = dbHelper.getQueuedCount()
+        val pass = syncQueue(onProgress = null)
+        val countAfter = dbHelper.getQueuedCount()
+
+        invalidateQueueCache()
+
+        // A pass that only skipped rows an instant send was still posting did not fail
+        val success = countAfter < countBefore || countAfter == 0 || (pass.sent + pass.failed == 0 && pass.skippedInFlight > 0)
+        if (success && countAfter == 0) {
+            markSuccess()
+        }
+
+        return success
+    }
+
+    fun rateLimitWaitSeconds(): Long = SyncState.rateLimitWaitSeconds(clock())
+
+    private fun noteRateLimit(retryAfterSeconds: Long?) {
+        val wait = SyncState.holdFor(retryAfterSeconds, clock())
+        AppLogger.w(TAG, "Rate limited: holding uploads for ${wait}s")
+    }
+
+    private suspend fun applyBackoffDelay() {
+        val backoffSeconds = SyncSchedule.backoffSeconds(consecutiveFailures)
+
+        AppLogger.w(TAG, "Backoff: ${backoffSeconds}s")
+
+        delay(backoffSeconds * 1000L)
+    }
+
+    /** What one pass moved. It caps at [MAX_BATCHES_PER_SYNC], so it need not empty the queue. */
+    data class SyncPass(val sent: Int, val failed: Int, val skippedInFlight: Int = 0)
+
+    private suspend fun syncQueue(onProgress: ((sent: Int, failed: Int) -> Unit)? = null): SyncPass = coroutineScope {
+        // Snapshot volatile config so it stays consistent for the entire sync pass
+        val currentEndpoint = endpoint
+        val currentAuthHeaders = authHeaders
+        val currentHttpMethod = httpMethod
+        val currentApiFormat = apiFormat
+        val currentBatchSize = overlandBatchSize
+        var totalProcessed = 0
+        var totalSucceeded = 0
+        var totalFailed = 0
+        var skippedInFlight = 0
+        var batchNumber = 1
+        // Rows that failed without a bump stay at the head of the queue, so a later fetch would post them again
+        val keptInPlace = mutableSetOf<Long>()
+
+        // Every chunk reports, sent or not: silence reads as a dead service and frees Sync Now mid-pass
+        fun reportProgress() {
+            if (onProgress != null) onProgress(totalSucceeded, totalFailed)
+            else waitingFlushTotal?.let { LocationServiceModule.sendSyncProgressEvent(totalSucceeded, totalFailed, it) }
+        }
+
+        while (isActive && batchNumber <= MAX_BATCHES_PER_SYNC) {
+            val fetchSize = if (currentApiFormat == ApiFormat.OVERLAND_BATCH) currentBatchSize else 50
+            val fetched = dbHelper.getQueuedLocations(fetchSize)
+            val queued = fetched.filterNot { it.queueId in instantInFlight || it.queueId in keptInPlace }
+            skippedInFlight += fetched.count { it.queueId in instantInFlight }
+            if (queued.isEmpty()) {
+                if (totalProcessed > 0) {
+                    val kept = if (keptInPlace.isEmpty()) "" else ", ${keptInPlace.size} kept for the next sync"
+                    AppLogger.d(TAG, "Sync complete: $totalProcessed items in ${batchNumber - 1} batches$kept")
+                }
+                break
+            }
+
+            AppLogger.d(TAG, "Processing batch $batchNumber/$MAX_BATCHES_PER_SYNC: ${queued.size} items")
+
+            val processedBefore = totalProcessed
+
+            if (currentApiFormat == ApiFormat.OVERLAND_BATCH) {
+                val result = batchSender.sendBatchRecursive(queued, currentEndpoint, currentAuthHeaders) { sent, failed ->
+                    totalProcessed += sent
+                    totalSucceeded += sent
+                    totalFailed += failed
+                    reportProgress()
+                }
+                if (result.stop) {
+                    AppLogger.d(TAG, "Sync pass stopped: the server is unreachable, failing or rate limiting")
+                    break
+                }
+            } else {
+                var stopped: String? = null
+                for (chunk in queued.chunked(10)) {
+                    val result = pointSender.sendChunk(
+                        chunk, currentEndpoint, currentAuthHeaders, currentHttpMethod, currentApiFormat, keptInPlace
+                    )
+                    totalProcessed += result.sent
+                    totalSucceeded += result.sent
+                    totalFailed += result.failed
+                    reportProgress()
+
+                    stopped = result.stopReason
+                    if (stopped != null) break
+                    yield()
+                }
+                if (stopped != null) {
+                    AppLogger.d(TAG, "Sync pass stopped: $stopped")
+                    break
+                }
+            }
+
+            if (totalProcessed == processedBefore) {
+                AppLogger.d(TAG, "No progress in batch $batchNumber, stopping sync pass")
+                break
+            }
+
+            batchNumber++
+        }
+
+        if (batchNumber > MAX_BATCHES_PER_SYNC) {
+            AppLogger.w(TAG, "Sync paused: reached batch limit. Remaining items will sync next cycle.")
+        }
+
+        invalidateQueueCache()
+
+        if (totalSucceeded > 0) {
+            markSuccess()
+        }
+
+        SyncPass(totalSucceeded, totalFailed, skippedInFlight)
+    }
+
+    private fun calculateNextSyncDelay(resumingWait: Boolean): Long {
+        if (syncIntervalSeconds <= 0) {
+            return if (getCachedQueuedCount() > 0) {
+                retryIntervalSeconds.toLong()
+            } else {
+                30L
+            }
+        }
+
+        return schedule.nextPeriodicDelaySeconds(syncIntervalSeconds, resumingWait)
+    }
+}

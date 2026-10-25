@@ -132,7 +132,7 @@ export function buildExportHeader(
   startedAtMs: number,
   nowMs: number
 ): string {
-  const lines = ["=== Colota log export ===", `Exported: ${localStamp(nowMs)}`]
+  const lines = ["=== ColotaEx log export ===", `Exported: ${localStamp(nowMs)}`]
   if (buildConfig) {
     const flavor = buildConfig.FLAVOR ? ` ${buildConfig.FLAVOR}` : ""
     lines.push(`App: ${buildConfig.VERSION_NAME} (${buildConfig.VERSION_CODE})${flavor}`)

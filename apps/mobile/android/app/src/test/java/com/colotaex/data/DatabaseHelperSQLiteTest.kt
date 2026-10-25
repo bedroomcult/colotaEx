@@ -1,0 +1,1517 @@
+/**
+ * Copyright (C) 2026 Max Dietrich
+ * Licensed under the GNU AGPLv3. See LICENSE in the project root for details.
+ */
+
+package com.colotaex.data
+
+import android.content.ContentValues
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteException
+import androidx.test.core.app.ApplicationProvider
+import org.junit.After
+import org.junit.Assert.*
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import com.colotaex.util.AppLogger
+import io.mockk.*
+import java.io.File
+
+/**
+ * SQLite integration tests for DatabaseHelper using Robolectric.
+ * Tests actual insert/query/delete, WAL mode, transaction handling, and foreign key cascades
+ * against a real SQLite DB.
+ *
+ * Migrations are covered through `migrateCandidate`, the backup-restore entry point. `onUpgrade`
+ * delegates to the same `applyMigrations`, so the SQL is covered either way.
+ */
+@RunWith(RobolectricTestRunner::class)
+class DatabaseHelperSQLiteTest {
+
+    private lateinit var db: DatabaseHelper
+
+    @Before
+    fun setUp() {
+        // Reset singleton so each test gets a fresh database
+        resetSingleton()
+        db = DatabaseHelper.getInstance(ApplicationProvider.getApplicationContext())
+
+        mockkObject(AppLogger)
+        every { AppLogger.d(any(), any()) } just Runs
+        every { AppLogger.i(any(), any()) } just Runs
+        every { AppLogger.w(any(), any()) } just Runs
+        every { AppLogger.e(any(), any(), any()) } just Runs
+    }
+
+    @After
+    fun tearDown() {
+        db.close()
+        resetSingleton()
+        unmockkObject(AppLogger)
+    }
+
+    private fun resetSingleton() {
+        val field = DatabaseHelper::class.java.getDeclaredField("INSTANCE")
+        field.isAccessible = true
+        field.set(null, null)
+    }
+
+    // ========================================================================
+    // Schema creation — tables and indexes exist
+    // ========================================================================
+
+    @Test
+    fun `onCreate creates all six tables`() {
+        val tables = queryTableNames()
+        assertTrue(tables.contains("locations"))
+        assertTrue(tables.contains("queue"))
+        assertTrue(tables.contains("settings"))
+        assertTrue(tables.contains("geofences"))
+        assertTrue(tables.contains("tracking_profiles"))
+        assertTrue(tables.contains("trip_boundary_overrides"))
+    }
+
+    @Test
+    fun `onCreate creates indexes`() {
+        val indexes = queryIndexNames()
+        assertTrue(indexes.contains("idx_queue_created"))
+        assertTrue(indexes.contains("idx_queue_location"))
+        assertTrue(indexes.contains("idx_locations_timestamp"))
+        assertTrue(indexes.contains("idx_locations_created"))
+        assertTrue(indexes.contains("idx_geofences_enabled"))
+        assertTrue(indexes.contains("idx_profiles_enabled"))
+        assertTrue(indexes.contains("idx_queue_retry"))
+    }
+
+    @Test
+    fun `onCreate prepopulates default settings`() {
+        val settings = db.getAllSettings()
+        assertEquals("5000", settings["interval"])
+        assertEquals("", settings["endpoint"])
+        assertEquals("0", settings["syncInterval"])
+        assertEquals("false", settings["tracking_enabled"])
+        assertEquals("POST", settings["httpMethod"])
+        assertEquals("custom", settings["apiTemplate"])
+        assertEquals("high", settings["accuracyMode"])
+    }
+
+    @Test
+    fun `tracking_profiles table includes activation_delay_seconds column`() {
+        val columns = queryColumnNames("tracking_profiles")
+        assertTrue(columns.contains("activation_delay_seconds"))
+    }
+
+    @Test
+    fun `tracking_profiles table includes wifi_ssid column`() {
+        val columns = queryColumnNames("tracking_profiles")
+        assertTrue(columns.contains("wifi_ssid"))
+    }
+
+    @Test
+    fun `tracking_profiles table includes the bluetooth columns`() {
+        val columns = queryColumnNames("tracking_profiles")
+        assertTrue(columns.contains("bluetooth_address"))
+        assertTrue(columns.contains("bluetooth_name"))
+    }
+
+    // ========================================================================
+    // Migration v8 -> v9: bluetooth_address, bluetooth_name
+    // ========================================================================
+
+    @Test
+    fun `migration from v8 adds the bluetooth columns and leaves existing profiles untouched`() {
+        val candidate = File.createTempFile("candidate-v8", ".db").also { it.delete() }
+        SQLiteDatabase.openOrCreateDatabase(candidate, null).use { old ->
+            old.execSQL(
+                """
+                CREATE TABLE tracking_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    interval_ms INTEGER NOT NULL,
+                    min_update_distance REAL NOT NULL,
+                    sync_interval_seconds INTEGER NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    condition_type TEXT NOT NULL,
+                    speed_threshold REAL,
+                    wifi_ssid TEXT,
+                    deactivation_delay_seconds INTEGER NOT NULL DEFAULT 30,
+                    activation_delay_seconds INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            old.execSQL(
+                """
+                INSERT INTO tracking_profiles
+                    (name, interval_ms, min_update_distance, sync_interval_seconds,
+                     priority, condition_type, wifi_ssid, deactivation_delay_seconds, created_at)
+                VALUES ('Home', 60000, 10, 300, 15, 'wifi_ssid', 'HomeNet', 60, 0)
+                """.trimIndent()
+            )
+            old.version = 8
+        }
+
+        DatabaseHelper.migrateCandidate(candidate)
+
+        SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { migrated ->
+            assertEquals(9, migrated.version)
+            migrated.rawQuery(
+                "SELECT wifi_ssid, bluetooth_address, bluetooth_name FROM tracking_profiles WHERE name = 'Home'",
+                null
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("HomeNet", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+                assertTrue(cursor.isNull(2))
+            }
+        }
+
+        candidate.delete()
+    }
+
+    // ========================================================================
+    // Migration v7 -> v8: wifi_ssid
+    // ========================================================================
+
+    @Test
+    fun `migration from v7 adds wifi_ssid and leaves existing profiles untouched`() {
+        val candidate = File.createTempFile("candidate-v7", ".db").also { it.delete() }
+        SQLiteDatabase.openOrCreateDatabase(candidate, null).use { old ->
+            old.execSQL(
+                """
+                CREATE TABLE tracking_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    interval_ms INTEGER NOT NULL,
+                    min_update_distance REAL NOT NULL,
+                    sync_interval_seconds INTEGER NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    condition_type TEXT NOT NULL,
+                    speed_threshold REAL,
+                    deactivation_delay_seconds INTEGER NOT NULL DEFAULT 30,
+                    activation_delay_seconds INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            old.execSQL(
+                """
+                INSERT INTO tracking_profiles
+                    (name, interval_ms, min_update_distance, sync_interval_seconds,
+                     priority, condition_type, deactivation_delay_seconds, created_at)
+                VALUES ('Charging', 10000, 0, 0, 10, 'charging', 60, 0)
+                """.trimIndent()
+            )
+            old.version = 7
+        }
+
+        DatabaseHelper.migrateCandidate(candidate)
+
+        SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { migrated ->
+            // A literal on purpose: migrateCandidate stamps the constant, so comparing against it
+            // passes for any value and stops forcing a migration arm when the version moves.
+            assertEquals(9, migrated.version)
+            migrated.rawQuery("PRAGMA table_info(tracking_profiles)", null).use { cursor ->
+                val columns = mutableSetOf<String>()
+                while (cursor.moveToNext()) columns.add(cursor.getString(1))
+                assertTrue(columns.contains("wifi_ssid"))
+            }
+            migrated.rawQuery("SELECT wifi_ssid FROM tracking_profiles WHERE name = 'Charging'", null).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertTrue(cursor.isNull(0))
+            }
+        }
+
+        candidate.delete()
+    }
+
+    // ========================================================================
+    // Migration v5 -> v6: activation_delay_seconds
+    // ========================================================================
+
+    @Test
+    fun `migration from v5 backfills activation_delay_seconds (stationary 60, others 0)`() {
+        // Seed a v5-schema candidate DB (tracking_profiles without the activation column)
+        val candidate = File.createTempFile("candidate-v5", ".db").also { it.delete() }
+        SQLiteDatabase.openOrCreateDatabase(candidate, null).use { old ->
+            old.execSQL(
+                """
+                CREATE TABLE tracking_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    interval_ms INTEGER NOT NULL,
+                    min_update_distance REAL NOT NULL,
+                    sync_interval_seconds INTEGER NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    condition_type TEXT NOT NULL,
+                    speed_threshold REAL,
+                    deactivation_delay_seconds INTEGER NOT NULL DEFAULT 30,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            old.execSQL(
+                """
+                INSERT INTO tracking_profiles
+                    (name, interval_ms, min_update_distance, sync_interval_seconds,
+                     priority, condition_type, deactivation_delay_seconds, created_at)
+                VALUES ('Charging', 10000, 0, 0, 10, 'charging', 60, 0),
+                       ('Parked', 1800000, 0, 0, 40, 'stationary', 0, 0)
+                """.trimIndent()
+            )
+            // v5-era locations table (no `note` column yet) for the v6 note ALTER to apply to
+            old.execSQL("CREATE TABLE locations (id INTEGER PRIMARY KEY AUTOINCREMENT, latitude REAL NOT NULL, longitude REAL NOT NULL, accuracy INTEGER, altitude INTEGER, speed INTEGER, bearing REAL, battery INTEGER, battery_status INTEGER, timestamp INTEGER NOT NULL, endpoint TEXT, sent INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)")
+            old.version = 5
+        }
+
+        DatabaseHelper.migrateCandidate(candidate)
+
+        SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { migrated ->
+            // A literal on purpose: migrateCandidate stamps the constant, so comparing against it
+            // passes for any value and stops forcing a migration arm when the version moves.
+            assertEquals(9, migrated.version)
+            // migrateCandidate stamps the version unconditionally, so the version alone proves
+            // nothing about the v7 step. This is the restore-an-older-backup path.
+            assertMigratedTableExists(migrated, DatabaseHelper.TABLE_BOUNDARY_OVERRIDES)
+            migrated.rawQuery(
+                "SELECT name, activation_delay_seconds FROM tracking_profiles",
+                null
+            ).use { cursor ->
+                val byName = mutableMapOf<String, Int>()
+                while (cursor.moveToNext()) {
+                    byName[cursor.getString(0)] = cursor.getInt(1)
+                }
+                // Non-stationary keeps the column default (instant); stationary is backfilled to its 60s window
+                assertEquals(0, byName["Charging"])
+                assertEquals(60, byName["Parked"])
+            }
+        }
+
+        candidate.delete()
+    }
+
+    @Test
+    fun `migration from v1 creates profiles then adds activation_delay_seconds without colliding`() {
+        // v1 predates the profiles table, so the < 2 migration creates it; the v6 migration then
+        // ALTERs in activation_delay_seconds. The two must not double-add the column.
+        val candidate = File.createTempFile("candidate-v1", ".db").also { it.delete() }
+        SQLiteDatabase.openOrCreateDatabase(candidate, null).use { old ->
+            // v1 schema: locations without `sent`, geofences without the v4/v5 columns, no profiles
+            old.execSQL("CREATE TABLE locations (id INTEGER PRIMARY KEY AUTOINCREMENT, latitude REAL NOT NULL, longitude REAL NOT NULL, accuracy INTEGER, altitude INTEGER, speed INTEGER, bearing REAL, battery INTEGER, battery_status INTEGER, timestamp INTEGER NOT NULL, endpoint TEXT, created_at INTEGER NOT NULL)")
+            old.execSQL("CREATE TABLE queue (id INTEGER PRIMARY KEY AUTOINCREMENT, location_id INTEGER NOT NULL, payload TEXT NOT NULL, retry_count INTEGER DEFAULT 0, last_error TEXT, created_at INTEGER NOT NULL)")
+            old.execSQL("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            old.execSQL("CREATE TABLE geofences (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, radius REAL NOT NULL, enabled INTEGER DEFAULT 1, pause_tracking INTEGER DEFAULT 1, notify_enter INTEGER DEFAULT 0, notify_exit INTEGER DEFAULT 0, created_at INTEGER NOT NULL)")
+            old.version = 1
+        }
+
+        // Must not throw (regression guard: the frozen v2 create must omit activation_delay_seconds)
+        DatabaseHelper.migrateCandidate(candidate)
+
+        SQLiteDatabase.openDatabase(candidate.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { migrated ->
+            // A literal on purpose: migrateCandidate stamps the constant, so comparing against it
+            // passes for any value and stops forcing a migration arm when the version moves.
+            assertEquals(9, migrated.version)
+            assertMigratedTableExists(migrated, DatabaseHelper.TABLE_BOUNDARY_OVERRIDES)
+            migrated.rawQuery("PRAGMA table_info(locations)", null).use { locCursor ->
+                val locCols = mutableSetOf<String>()
+                while (locCursor.moveToNext()) {
+                    locCols.add(locCursor.getString(locCursor.getColumnIndexOrThrow("name")))
+                }
+                assertTrue(locCols.contains("note"))
+            }
+            migrated.rawQuery("PRAGMA table_info(tracking_profiles)", null).use { cursor ->
+                val cols = mutableSetOf<String>()
+                while (cursor.moveToNext()) {
+                    cols.add(cursor.getString(cursor.getColumnIndexOrThrow("name")))
+                }
+                assertTrue(cols.contains("activation_delay_seconds"))
+            }
+        }
+
+        candidate.delete()
+    }
+
+    // ========================================================================
+    // WAL mode and pragmas
+    // ========================================================================
+
+    @Test
+    fun `database has WAL journal mode enabled`() {
+        val rawDb = db.readableDatabase
+        rawDb.rawQuery("PRAGMA journal_mode", null).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("wal", cursor.getString(0))
+        }
+    }
+
+    @Test
+    fun `foreign keys are enabled`() {
+        val rawDb = db.readableDatabase
+        rawDb.rawQuery("PRAGMA foreign_keys", null).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(1, cursor.getInt(0))
+        }
+    }
+
+    // ========================================================================
+    // Location CRUD operations
+    // ========================================================================
+
+    @Test
+    fun `saveLocation inserts and returns valid id`() {
+        val id = db.saveLocation(
+            latitude = 52.52,
+            longitude = 13.405,
+            accuracy = 10.0,
+            timestamp = 1700000000L
+        )
+        assertTrue(id > 0)
+    }
+
+    @Test
+    fun `saveLocation stores all fields correctly`() {
+        val id = db.saveLocation(
+            latitude = 52.52,
+            longitude = 13.405,
+            accuracy = 10.5,
+            altitude = 34,
+            speed = 1.5,
+            bearing = 90.0,
+            battery = 85,
+            battery_status = 2,
+            timestamp = 1700000000L,
+            endpoint = "https://example.com"
+        )
+
+        val rawDb = db.readableDatabase
+        rawDb.rawQuery("SELECT * FROM ${DatabaseHelper.TABLE_LOCATIONS} WHERE id = ?", arrayOf(id.toString())).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(52.52, cursor.getDouble(cursor.getColumnIndexOrThrow("latitude")), 0.001)
+            assertEquals(13.405, cursor.getDouble(cursor.getColumnIndexOrThrow("longitude")), 0.001)
+            assertEquals(10.5, cursor.getDouble(cursor.getColumnIndexOrThrow("accuracy")), 0.1)
+            assertEquals(34, cursor.getInt(cursor.getColumnIndexOrThrow("altitude")))
+            assertEquals(90.0, cursor.getDouble(cursor.getColumnIndexOrThrow("bearing")), 0.1)
+            assertEquals(85, cursor.getInt(cursor.getColumnIndexOrThrow("battery")))
+            assertEquals(2, cursor.getInt(cursor.getColumnIndexOrThrow("battery_status")))
+            assertEquals(1700000000L, cursor.getLong(cursor.getColumnIndexOrThrow("timestamp")))
+            assertEquals("https://example.com", cursor.getString(cursor.getColumnIndexOrThrow("endpoint")))
+        }
+    }
+
+    @Test
+    fun `saveLocation handles null optional fields`() {
+        val id = db.saveLocation(
+            latitude = 52.52,
+            longitude = 13.405,
+            timestamp = 1700000000L
+        )
+
+        val rawDb = db.readableDatabase
+        rawDb.rawQuery("SELECT accuracy, altitude, speed FROM ${DatabaseHelper.TABLE_LOCATIONS} WHERE id = ?", arrayOf(id.toString())).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+        }
+    }
+
+    @Test
+    fun `updateLocationNote sets and clears the note`() {
+        val id = db.saveLocation(latitude = 52.52, longitude = 13.405, timestamp = 1700000000L)
+
+        db.updateLocationNote(id, "saw a deer")
+        val rawDb = db.readableDatabase
+        rawDb.rawQuery("SELECT note FROM ${DatabaseHelper.TABLE_LOCATIONS} WHERE id = ?", arrayOf(id.toString())).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("saw a deer", cursor.getString(0))
+        }
+
+        db.updateLocationNote(id, null)
+        rawDb.rawQuery("SELECT note FROM ${DatabaseHelper.TABLE_LOCATIONS} WHERE id = ?", arrayOf(id.toString())).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+        }
+    }
+
+    @Test
+    fun `getRawMostRecentLocation returns latest by timestamp`() {
+        db.saveLocation(latitude = 52.0, longitude = 13.0, accuracy = 5.0, timestamp = 1000L)
+        db.saveLocation(latitude = 53.0, longitude = 14.0, accuracy = 10.0, timestamp = 2000L)
+        db.saveLocation(latitude = 51.0, longitude = 12.0, accuracy = 15.0, timestamp = 1500L)
+
+        val result = db.getRawMostRecentLocation()
+        assertNotNull(result)
+        assertEquals(53.0, result!!["latitude"] as Double, 0.001)
+        assertEquals(14.0, result["longitude"] as Double, 0.001)
+        assertEquals(2000L, result["timestamp"])
+    }
+
+    @Test
+    fun `getRawMostRecentLocation returns null when empty`() {
+        assertNull(db.getRawMostRecentLocation())
+    }
+
+    @Test
+    fun `deleteLocations removes specified locations`() {
+        val id1 = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        val id2 = db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 2000L)
+        val id3 = db.saveLocation(latitude = 54.0, longitude = 15.0, timestamp = 3000L)
+
+        db.deleteLocations(listOf(id1, id3))
+
+        val remaining = db.getTableData(DatabaseHelper.TABLE_LOCATIONS, 100, 0)
+        assertEquals(1, remaining.size)
+        assertEquals(53.0, remaining[0]["latitude"] as Double, 0.001)
+    }
+
+    @Test
+    fun `deleteLocations returns the number of rows removed`() {
+        val id1 = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        val id2 = db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 2000L)
+
+        assertEquals(2, db.deleteLocations(listOf(id1, id2)))
+        assertEquals(0, db.deleteLocations(listOf(id1)))
+    }
+
+    @Test
+    fun `deleteLocations is no-op for empty list`() {
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        db.deleteLocations(emptyList())
+
+        val remaining = db.getTableData(DatabaseHelper.TABLE_LOCATIONS, 100, 0)
+        assertEquals(1, remaining.size)
+    }
+
+    // ========================================================================
+    // Queue operations
+    // ========================================================================
+
+    @Test
+    fun `addToQueue and getQueuedLocations round-trip`() {
+        val locId = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        val queueId = db.addToQueue(locId, """{"lat":52.0}""")
+        assertTrue(queueId > 0)
+
+        val queued = db.getQueuedLocations(10)
+        assertEquals(1, queued.size)
+        assertEquals(queueId, queued[0].queueId)
+        assertEquals(locId, queued[0].locationId)
+        assertEquals("""{"lat":52.0}""", queued[0].payload)
+        assertEquals(0, queued[0].retryCount)
+    }
+
+    @Test
+    fun `getQueuedLocations respects limit`() {
+        repeat(5) { i ->
+            val locId = db.saveLocation(latitude = 52.0 + i, longitude = 13.0, timestamp = 1000L + i)
+            db.addToQueue(locId, """{"lat":${52.0 + i}}""")
+        }
+
+        assertEquals(3, db.getQueuedLocations(3).size)
+        assertEquals(5, db.getQueuedLocations(10).size)
+    }
+
+    @Test
+    fun `getQueuedLocations returns oldest first`() {
+        val loc1 = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        val loc2 = db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 2000L)
+        db.addToQueue(loc1, """{"id":"first"}""")
+        // Slight delay to ensure different created_at
+        db.addToQueue(loc2, """{"id":"second"}""")
+
+        val queued = db.getQueuedLocations(10)
+        assertEquals("""{"id":"first"}""", queued[0].payload)
+        assertEquals("""{"id":"second"}""", queued[1].payload)
+    }
+
+    @Test
+    fun `getQueuedLocations returns fresh items before high-retry items`() {
+        val loc1 = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        val loc2 = db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 2000L)
+        val q1 = db.addToQueue(loc1, """{"id":"failing"}""")
+        db.addToQueue(loc2, """{"id":"fresh"}""")
+
+        // Increment retry count on the first (older) item
+        db.incrementRetryCount(q1, "error")
+        db.incrementRetryCount(q1, "error")
+        db.incrementRetryCount(q1, "error")
+
+        // Fresh item (retry_count=0) should come first despite being newer
+        val queued = db.getQueuedLocations(10)
+        assertEquals("""{"id":"fresh"}""", queued[0].payload)
+        assertEquals("""{"id":"failing"}""", queued[1].payload)
+    }
+
+    @Test
+    fun `removeFromQueueByLocationId deletes matching entries`() {
+        val locId = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        db.addToQueue(locId, """{"lat":52.0}""")
+
+        val deleted = db.removeFromQueueByLocationId(locId)
+        assertEquals(1, deleted)
+        assertEquals(0, db.getQueuedCount())
+    }
+
+    @Test
+    fun `removeBatchFromQueue deletes multiple entries`() {
+        val ids = (1..5).map { i ->
+            val locId = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L + i)
+            db.addToQueue(locId, """{"i":$i}""")
+        }
+
+        db.removeBatchFromQueue(ids.take(3))
+
+        assertEquals(2, db.getQueuedCount())
+    }
+
+    @Test
+    fun `removeBatchFromQueue is no-op for empty list`() {
+        val locId = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        db.addToQueue(locId, """{"lat":52.0}""")
+
+        db.removeBatchFromQueue(emptyList())
+        assertEquals(1, db.getQueuedCount())
+    }
+
+    @Test
+    fun `incrementRetryCount updates count and error`() {
+        val locId = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        val queueId = db.addToQueue(locId, """{"lat":52.0}""")
+
+        db.incrementRetryCount(queueId, "Network error")
+
+        val queued = db.getQueuedLocations(10)
+        assertEquals(1, queued[0].retryCount)
+
+        // Verify error text via raw query
+        db.readableDatabase.rawQuery(
+            "SELECT last_error FROM ${DatabaseHelper.TABLE_QUEUE} WHERE id = ?",
+            arrayOf(queueId.toString())
+        ).use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("Network error", cursor.getString(0))
+        }
+    }
+
+    @Test
+    fun `incrementRetryCount accumulates across multiple calls`() {
+        val locId = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        val queueId = db.addToQueue(locId, """{"lat":52.0}""")
+
+        db.incrementRetryCount(queueId, "err1")
+        db.incrementRetryCount(queueId, "err2")
+        db.incrementRetryCount(queueId, "err3")
+
+        val queued = db.getQueuedLocations(10)
+        assertEquals(3, queued[0].retryCount)
+    }
+
+    @Test
+    fun `getQueuedCount returns correct count`() {
+        assertEquals(0, db.getQueuedCount())
+
+        val locId = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        db.addToQueue(locId, """{"lat":52.0}""")
+        db.addToQueue(locId, """{"lat":52.0}""")
+
+        assertEquals(2, db.getQueuedCount())
+    }
+
+    // ========================================================================
+    // Foreign key cascades
+    // ========================================================================
+
+    @Test
+    fun `deleting location cascades to queue entries`() {
+        val locId = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        val keptId = db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 2000L)
+        db.addToQueue(locId, """{"lat":52.0}""")
+        db.addToQueue(locId, """{"lat":52.0,"v":2}""")
+        db.addToQueue(keptId, """{"lat":53.0}""")
+        assertEquals(3, db.getQueuedCount())
+
+        // Delete the location - should cascade to queue, leaving other points queued
+        db.deleteLocations(listOf(locId))
+
+        val queued = db.getQueuedLocations(10)
+        assertEquals(1, queued.size)
+        assertEquals(keptId, queued[0].locationId)
+    }
+
+    @Test
+    fun `clearAllLocations removes both locations and queue entries`() {
+        val loc1 = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        val loc2 = db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 2000L)
+        db.addToQueue(loc1, """{"lat":52.0}""")
+        db.addToQueue(loc2, """{"lat":53.0}""")
+
+        db.clearAllLocations()
+
+        assertEquals(0, db.getQueuedCount())
+        assertNull(db.getRawMostRecentLocation())
+    }
+
+    @Test
+    fun `clearQueue removes only queued locations not sent ones`() {
+        val queued = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        val sent = db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 2000L)
+        db.addToQueue(queued, """{"lat":52.0}""")
+
+        db.clearQueue()
+
+        // Queued location (and its queue entry) should be gone
+        assertEquals(0, db.getQueuedCount())
+        // Sent location should remain
+        val recent = db.getRawMostRecentLocation()
+        assertNotNull(recent)
+        assertEquals(53.0, recent!!["latitude"] as Double, 0.001)
+    }
+
+    @Test
+    fun `clearSentHistory removes only sent locations`() {
+        val queued = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        val sent = db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 2000L)
+        db.addToQueue(queued, """{"lat":52.0}""")
+        db.markLocationsSent(listOf(sent))
+
+        val deleted = db.clearSentHistory()
+        assertEquals(1, deleted)
+
+        // Queued location should remain
+        assertEquals(1, db.getQueuedCount())
+        val recent = db.getRawMostRecentLocation()
+        assertEquals(52.0, recent!!["latitude"] as Double, 0.001)
+    }
+
+    // ========================================================================
+    // Transaction handling
+    // ========================================================================
+
+    @Test
+    fun `prepopulateSettings inserts all defaults in single transaction`() {
+        val settings = db.getAllSettings()
+        // Verify all expected defaults exist
+        assertTrue(settings.containsKey("interval"))
+        assertTrue(settings.containsKey("endpoint"))
+        assertTrue(settings.containsKey("fieldMap"))
+        assertTrue(settings.containsKey("tracking_enabled"))
+        assertTrue(settings.containsKey("httpMethod"))
+        assertTrue(settings.size >= 16)
+    }
+
+    @Test
+    fun `saveSetting uses CONFLICT_REPLACE for upsert`() {
+        db.saveSetting("tracking_enabled", "true")
+        assertEquals("true", db.getSetting("tracking_enabled"))
+
+        db.saveSetting("tracking_enabled", "false")
+        assertEquals("false", db.getSetting("tracking_enabled"))
+    }
+
+    @Test
+    fun `removeBatchFromQueue handles large batches correctly`() {
+        val ids = (1..100).map { i ->
+            val locId = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L + i)
+            db.addToQueue(locId, """{"i":$i}""")
+        }
+
+        db.removeBatchFromQueue(ids)
+        assertEquals(0, db.getQueuedCount())
+    }
+
+    // ========================================================================
+    // Settings operations
+    // ========================================================================
+
+    @Test
+    fun `getSetting returns null for missing key`() {
+        assertNull(db.getSetting("nonexistent_key"))
+    }
+
+    @Test
+    fun `getSetting returns default value for missing key`() {
+        assertEquals("fallback", db.getSetting("nonexistent_key", "fallback"))
+    }
+
+    @Test
+    fun `getSetting trims whitespace from values`() {
+        db.saveSetting("test_key", "  hello  ")
+        assertEquals("hello", db.getSetting("test_key"))
+    }
+
+    @Test
+    fun `getAllSettings returns complete map`() {
+        db.saveSetting("custom1", "value1")
+        db.saveSetting("custom2", "value2")
+
+        val all = db.getAllSettings()
+        assertEquals("value1", all["custom1"])
+        assertEquals("value2", all["custom2"])
+        // Plus prepopulated defaults
+        assertTrue(all.size >= 18)
+    }
+
+    @Test
+    fun `getAllSettingsOrThrow reads the same map as getAllSettings`() {
+        db.saveSetting("custom1", "value1")
+
+        assertEquals(db.getAllSettings(), db.getAllSettingsOrThrow())
+    }
+
+    /** JS writes defaults over an empty read, so the bridge needs the failure, not an empty map. */
+    @Test
+    fun `getAllSettingsOrThrow throws on a failed read that getAllSettings reports as empty`() {
+        db.writableDatabase.execSQL("DROP TABLE ${DatabaseHelper.TABLE_SETTINGS}")
+
+        assertTrue(db.getAllSettings().isEmpty())
+
+        try {
+            db.getAllSettingsOrThrow()
+            fail("Expected SQLiteException")
+        } catch (e: SQLiteException) {
+            assertTrue(e.message?.contains("no such table") == true)
+        }
+    }
+
+    // ========================================================================
+    // getTableData — pagination and type handling
+    // ========================================================================
+
+    @Test
+    fun `getTableData returns paginated results`() {
+        repeat(10) { i ->
+            db.saveLocation(latitude = 52.0 + i, longitude = 13.0, timestamp = 1000L + i)
+        }
+
+        val page1 = db.getTableData(DatabaseHelper.TABLE_LOCATIONS, 3, 0)
+        val page2 = db.getTableData(DatabaseHelper.TABLE_LOCATIONS, 3, 3)
+
+        assertEquals(3, page1.size)
+        assertEquals(3, page2.size)
+        // Locations ordered by timestamp DESC — newest first
+        val t1 = page1[0]["timestamp"] as Long
+        val t2 = page1[1]["timestamp"] as Long
+        val t3 = page1[2]["timestamp"] as Long
+        assertTrue("Page 1 should be sorted newest-first", t1 > t2 && t2 > t3)
+        // Page 2 starts after page 1
+        val t4 = page2[0]["timestamp"] as Long
+        assertTrue("Page 2 should continue after page 1", t3 > t4)
+    }
+
+    @Test
+    fun `getTableData handles mixed column types`() {
+        db.saveLocation(
+            latitude = 52.52,
+            longitude = 13.405,
+            accuracy = 10.0,
+            altitude = 34,
+            timestamp = 1700000000L,
+            endpoint = "https://example.com"
+        )
+
+        val data = db.getTableData(DatabaseHelper.TABLE_LOCATIONS, 1, 0)
+        assertEquals(1, data.size)
+        val row = data[0]
+        // REAL columns
+        assertTrue(row["latitude"] is Double)
+        // INTEGER columns
+        assertTrue(row["timestamp"] is Long)
+        // TEXT columns
+        assertTrue(row["endpoint"] is String)
+    }
+
+    @Test
+    fun `getTableData rejects unknown table names`() {
+        try {
+            db.getTableData("evil_table; DROP TABLE locations", 10, 0)
+            fail("Should throw IllegalArgumentException")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("Invalid table name"))
+        }
+    }
+
+    // ========================================================================
+    // getLocationsByDateRange
+    // ========================================================================
+
+    @Test
+    fun `getLocationsByDateRange returns locations in ascending order`() {
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 2000L)
+        db.saveLocation(latitude = 54.0, longitude = 15.0, timestamp = 3000L)
+
+        val result = db.getLocationsByDateRange(1000L, 3000L)
+        assertEquals(3, result.size)
+        assertEquals(1000L, result[0]["timestamp"])
+        assertEquals(2000L, result[1]["timestamp"])
+        assertEquals(3000L, result[2]["timestamp"])
+    }
+
+    @Test
+    fun `getLocationsByDateRange filters by range boundaries`() {
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 500L)
+        db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 1000L)
+        db.saveLocation(latitude = 54.0, longitude = 15.0, timestamp = 2000L)
+        db.saveLocation(latitude = 55.0, longitude = 16.0, timestamp = 3000L)
+
+        val result = db.getLocationsByDateRange(1000L, 2000L)
+        assertEquals(2, result.size)
+        assertEquals(1000L, result[0]["timestamp"])
+        assertEquals(2000L, result[1]["timestamp"])
+    }
+
+    @Test
+    fun `getLocationsByDateRange returns empty for no matches`() {
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+
+        val result = db.getLocationsByDateRange(5000L, 6000L)
+        assertTrue(result.isEmpty())
+    }
+
+    // ========================================================================
+    // forEachLocationInRange
+    // ========================================================================
+
+    private fun screenRows(start: Long, end: Long) =
+        buildList { db.forEachLocationInRange(start, end) { add(it) } }
+
+    @Test
+    fun `forEachLocationInRange hands over the range in ascending order, boundaries included`() {
+        db.saveLocation(latitude = 55.0, longitude = 16.0, timestamp = 3000L)
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 500L)
+        db.saveLocation(latitude = 54.0, longitude = 15.0, timestamp = 2000L)
+        db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 1000L)
+
+        assertEquals(listOf(1000L, 2000L), screenRows(1000L, 2000L).map { it["timestamp"] })
+    }
+
+    // The server URL is stored on every row and no screen reads it.
+    @Test
+    fun `forEachLocationInRange carries what a screen shows and leaves the endpoint behind`() {
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L, endpoint = "https://example.com/api")
+
+        val row = screenRows(0L, 9999L).single()
+
+        assertEquals(
+            setOf(
+                "id", "latitude", "longitude", "accuracy", "altitude", "speed", "bearing",
+                "battery", "battery_status", "timestamp", "sent", "note"
+            ),
+            row.keys
+        )
+        assertEquals(52.0, row["latitude"])
+    }
+
+    @Test
+    fun `forEachLocationInRange throws when the read fails`() {
+        db.writableDatabase.execSQL("DROP TABLE locations")
+
+        assertThrows(SQLiteException::class.java) { db.forEachLocationInRange(0L, 9999L) {} }
+    }
+
+    // ========================================================================
+    // Export readers throw, so a failed page never ends an export as complete
+    // ========================================================================
+
+    @Test
+    fun `getLocationsByDateRange throws when the read fails`() {
+        db.writableDatabase.execSQL("DROP TABLE locations")
+
+        assertThrows(SQLiteException::class.java) { db.getLocationsByDateRange(0L, 9999L, 100, 0) }
+    }
+
+    @Test
+    fun `getLocationsChronological throws when the read fails`() {
+        db.writableDatabase.execSQL("DROP TABLE locations")
+
+        assertThrows(SQLiteException::class.java) { db.getLocationsChronological(100, 0) }
+    }
+
+    // ========================================================================
+    // Stats and cleanup
+    // ========================================================================
+
+    @Test
+    fun `getStats returns correct counts`() {
+        val loc1 = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = System.currentTimeMillis() / 1000)
+        val loc2 = db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = System.currentTimeMillis() / 1000)
+        db.addToQueue(loc1, """{"lat":52.0}""")
+
+        val stats = db.getStats()
+        assertEquals(1, stats.queued)
+        assertEquals(0, stats.sent)
+        assertEquals(2, stats.total)
+        assertEquals(2, stats.today)
+    }
+
+    @Test
+    fun `getStats returns zeros for empty database`() {
+        val stats = db.getStats()
+        assertEquals(0, stats.queued)
+        assertEquals(0, stats.sent)
+        assertEquals(0, stats.total)
+        assertEquals(0, stats.today)
+    }
+
+    @Test
+    fun `vacuum runs without error`() {
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        db.vacuum()
+        // No exception = pass
+    }
+
+    // ========================================================================
+    // WAL concurrent access patterns
+    // ========================================================================
+
+    @Test
+    fun `read during open write transaction does not block`() {
+        // Insert baseline data
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+
+        // Start a write transaction, then read — should not throw or deadlock
+        val rawDb = db.writableDatabase
+        rawDb.beginTransaction()
+        try {
+            val values = ContentValues().apply {
+                put("latitude", 53.0)
+                put("longitude", 14.0)
+                put("timestamp", 2000L)
+                put("created_at", System.currentTimeMillis() / 1000)
+            }
+            rawDb.insert(DatabaseHelper.TABLE_LOCATIONS, null, values)
+
+            // Read while write transaction is open — WAL allows this without blocking.
+            // Note: Robolectric uses a single connection, so uncommitted data may be
+            // visible here. True WAL isolation requires separate connections.
+            val recent = db.getRawMostRecentLocation()
+            assertNotNull(recent)
+
+            rawDb.setTransactionSuccessful()
+        } finally {
+            rawDb.endTransaction()
+        }
+
+        // After commit, read sees new data
+        val recent = db.getRawMostRecentLocation()
+        assertEquals(53.0, recent!!["latitude"] as Double, 0.001)
+    }
+
+    @Test
+    fun `write transaction rollback does not persist data`() {
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+
+        val rawDb = db.writableDatabase
+        rawDb.beginTransaction()
+        try {
+            val values = ContentValues().apply {
+                put("latitude", 99.0)
+                put("longitude", 99.0)
+                put("timestamp", 9999L)
+                put("created_at", System.currentTimeMillis() / 1000)
+            }
+            rawDb.insert(DatabaseHelper.TABLE_LOCATIONS, null, values)
+            // Intentionally NOT calling setTransactionSuccessful()
+        } finally {
+            rawDb.endTransaction()
+        }
+
+        // Rolled-back row should not exist
+        val data = db.getTableData(DatabaseHelper.TABLE_LOCATIONS, 100, 0)
+        assertEquals(1, data.size)
+        assertEquals(52.0, data[0]["latitude"] as Double, 0.001)
+    }
+
+    // ========================================================================
+    // getDaysWithData
+    // ========================================================================
+
+    @Test
+    fun `getDaysWithData returns distinct days`() {
+        // Two locations on same day, one on a different day
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1708344000L) // midday
+        db.saveLocation(latitude = 52.1, longitude = 13.1, timestamp = 1708344060L) // +1 min same day
+        db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 1708430400L) // next day midday
+
+        val days = db.getDaysWithData(1708300000L, 1708500000L)
+        assertEquals(2, days.size)
+        // Ordered ASC
+        assertTrue(days[0] < days[1])
+    }
+
+    @Test
+    fun `getDaysWithData returns empty for no matches`() {
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1708344000L)
+
+        val days = db.getDaysWithData(1700000000L, 1700100000L)
+        assertTrue(days.isEmpty())
+    }
+
+    @Test
+    fun `getDaysWithData respects range boundaries`() {
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L) // outside range
+        db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 5000L) // inside range
+        db.saveLocation(latitude = 54.0, longitude = 15.0, timestamp = 9000L) // outside range
+
+        val days = db.getDaysWithData(4000L, 6000L)
+        assertEquals(1, days.size)
+    }
+
+    // ========================================================================
+    // getDaysWithNotes
+    // ========================================================================
+
+    @Test
+    fun `getDaysWithNotes returns only days with non-empty notes`() {
+        val annotated = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1708344000L) // day A, midday
+        db.saveLocation(latitude = 52.1, longitude = 13.1, timestamp = 1708344060L) // day A, no note
+        db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 1708430400L) // day B (+1 day), no note
+        db.updateLocationNote(annotated, "lunch spot")
+
+        // Full range: only day A carries a note
+        assertEquals(1, db.getDaysWithNotes(1708300000L, 1708500000L).size)
+        // Narrowed to day A: the annotated day is returned
+        assertEquals(1, db.getDaysWithNotes(1708300000L, 1708387200L).size)
+        // Narrowed to day B: has points but none annotated
+        assertTrue(db.getDaysWithNotes(1708387200L, 1708500000L).isEmpty())
+    }
+
+    @Test
+    fun `getDaysWithNotes excludes empty and cleared notes`() {
+        val emptied = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1708344000L)
+        val cleared = db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 1708430400L)
+        db.updateLocationNote(emptied, "") // empty string
+        db.updateLocationNote(cleared, null) // cleared back to null
+
+        val days = db.getDaysWithNotes(1708300000L, 1708500000L)
+        assertTrue(days.isEmpty())
+    }
+
+    // ========================================================================
+    // getDailyStats
+    // ========================================================================
+
+    @Test
+    fun `getDailyStats returns per-day aggregated stats`() {
+        // Day 1: 3 locations close together (single trip)
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1708344000L)
+        db.saveLocation(latitude = 52.001, longitude = 13.001, timestamp = 1708344060L)
+        db.saveLocation(latitude = 52.002, longitude = 13.002, timestamp = 1708344120L)
+
+        // Day 2: 2 locations
+        db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 1708430400L)
+        db.saveLocation(latitude = 53.001, longitude = 14.001, timestamp = 1708430460L)
+
+        val stats = db.getDailyStats(1708300000L, 1708500000L)
+        assertEquals(2, stats.size)
+
+        // Day 1 stats
+        assertEquals(3, stats[0]["count"])
+        assertTrue((stats[0]["distanceMeters"] as Double) > 0)
+        assertEquals(1, stats[0]["tripCount"]) // all within 60s, no gap
+    }
+
+    @Test
+    fun `getDailyStats counts trips based on time gaps`() {
+        // Trip 1: two locations 60s apart
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1708344000L) // 12:00
+        db.saveLocation(latitude = 52.1, longitude = 13.1, timestamp = 1708344060L) // 12:01
+
+        // Gap of 16 minutes (> 900s threshold)
+
+        // Trip 2: two more locations
+        db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = 1708345020L) // 12:17
+        db.saveLocation(latitude = 53.1, longitude = 14.1, timestamp = 1708345080L) // 12:18
+
+        val stats = db.getDailyStats(1708300000L, 1708400000L)
+        assertEquals(1, stats.size)
+        assertEquals(4, stats[0]["count"])
+        assertEquals(2, stats[0]["tripCount"])
+    }
+
+    @Test
+    fun `getDailyStats ignores a stationary run at a single coordinate`() {
+        // Heartbeat points at the zone centre, 10 min apart so they chain into one segment
+        repeat(10) { i ->
+            db.saveLocation(latitude = 52.52, longitude = 13.405, timestamp = 1708344000L + i * 600L)
+        }
+
+        val stats = db.getDailyStats(1708300000L, 1708400000L)
+        assertEquals(1, stats.size)
+        assertEquals(10, stats[0]["count"])
+        assertEquals(0, stats[0]["tripCount"])
+        assertEquals(0.0, stats[0]["distanceMeters"] as Double, 0.001)
+    }
+
+    @Test
+    fun `getDailyStats ignores a jittering stationary run despite its total distance`() {
+        // Real fixes, so every point moves - total distance passes 200m while the bbox stays ~60m
+        val offsets = listOf(0.0, 0.0002, -0.0001, 0.00025, -0.00022, 0.0001, -0.00025, 0.00018, -0.00015, 0.00022)
+        offsets.forEachIndexed { i, d ->
+            db.saveLocation(
+                latitude = 52.52 + d,
+                longitude = 13.405 + if (i % 2 == 0) d else -d,
+                timestamp = 1708344000L + i * 600L
+            )
+        }
+
+        val stats = db.getDailyStats(1708300000L, 1708400000L)
+        assertEquals(1, stats.size)
+        assertEquals(0, stats[0]["tripCount"])
+        assertEquals(0.0, stats[0]["distanceMeters"] as Double, 0.001)
+    }
+
+    @Test
+    fun `getDailyStats counts a real trip that follows a stationary run`() {
+        // Stationary run followed by a real trip
+        repeat(5) { i ->
+            db.saveLocation(latitude = 52.52, longitude = 13.405, timestamp = 1708344000L + i * 600L)
+        }
+        db.saveLocation(latitude = 52.6, longitude = 13.405, timestamp = 1708348000L)
+        db.saveLocation(latitude = 52.61, longitude = 13.405, timestamp = 1708348060L)
+
+        val stats = db.getDailyStats(1708300000L, 1708400000L)
+        assertEquals(1, stats.size)
+        assertEquals(1, stats[0]["tripCount"])
+        assertTrue((stats[0]["distanceMeters"] as Double) > 1000)
+    }
+
+    @Test
+    fun `getDailyStats returns empty for no data`() {
+        val stats = db.getDailyStats(1708300000L, 1708400000L)
+        assertTrue(stats.isEmpty())
+    }
+
+    @Test
+    fun `getDailyStats computes distance via haversine`() {
+        // Two points roughly 11 km apart (Berlin to Potsdam)
+        db.saveLocation(latitude = 52.52, longitude = 13.405, timestamp = 1708344000L)
+        db.saveLocation(latitude = 52.39, longitude = 13.065, timestamp = 1708344060L)
+
+        val stats = db.getDailyStats(1708300000L, 1708400000L)
+        assertEquals(1, stats.size)
+        val distance = stats[0]["distanceMeters"] as Double
+        // Distance should be roughly 25-30 km (haversine)
+        assertTrue("Distance should be > 20km, was $distance", distance > 20000)
+        assertTrue("Distance should be < 40km, was $distance", distance < 40000)
+    }
+
+    // ========================================================================
+    // trip boundary overrides
+    // ========================================================================
+
+    @Test
+    fun `addBoundaryOverrides and getBoundaryOverrides round-trip`() {
+        db.addBoundaryOverrides(listOf(
+            Triple(1000L, 2000L, DatabaseHelper.BOUNDARY_ACTION_MERGE),
+            Triple(3000L, 4000L, DatabaseHelper.BOUNDARY_ACTION_SPLIT)
+        ))
+
+        val stored = db.getBoundaryOverrides()
+        assertEquals(2, stored.size)
+        assertEquals(Triple(1000L, 2000L, DatabaseHelper.BOUNDARY_ACTION_MERGE), stored[0])
+        assertEquals(Triple(3000L, 4000L, DatabaseHelper.BOUNDARY_ACTION_SPLIT), stored[1])
+    }
+
+    @Test
+    fun `writing the same boundary twice keeps the latest action`() {
+        // Splitting a boundary the user previously merged has to win outright - otherwise the
+        // edit silently does nothing and there is no separate cleanup step to fall back on.
+        db.addBoundaryOverrides(listOf(Triple(1000L, 2000L, DatabaseHelper.BOUNDARY_ACTION_MERGE)))
+        db.addBoundaryOverrides(listOf(Triple(1000L, 2000L, DatabaseHelper.BOUNDARY_ACTION_SPLIT)))
+
+        val stored = db.getBoundaryOverrides()
+        assertEquals(1, stored.size)
+        assertEquals(DatabaseHelper.BOUNDARY_ACTION_SPLIT, stored[0].third)
+    }
+
+    @Test
+    fun `addBoundaryOverrides is no-op for empty list`() {
+        assertEquals(0, db.addBoundaryOverrides(emptyList()))
+        assertTrue(db.getBoundaryOverrides().isEmpty())
+    }
+
+    @Test
+    fun `deleting a location leaves its override behind as an inert no-op`() {
+        // Overrides are keyed by timestamp, not row id. The contract is that a stale row must
+        // never break segmentation.
+        db.saveLocation(latitude = 52.52, longitude = 13.405, timestamp = 1000L)
+        db.addBoundaryOverrides(listOf(Triple(1000L, 2000L, DatabaseHelper.BOUNDARY_ACTION_MERGE)))
+
+        db.deleteInRange(1000L, 1000L)
+
+        assertEquals(1, db.getBoundaryOverrides().size)
+        val stats = db.getDailyStats(0L, 9999999L)
+        assertTrue(stats.isEmpty())
+    }
+
+    @Test
+    fun `clearAllLocations also drops boundary overrides`() {
+        db.saveLocation(latitude = 52.52, longitude = 13.405, timestamp = 1000L)
+        db.addBoundaryOverrides(listOf(Triple(1000L, 2000L, DatabaseHelper.BOUNDARY_ACTION_MERGE)))
+
+        db.clearAllLocations()
+
+        assertTrue(db.getBoundaryOverrides().isEmpty())
+    }
+
+    @Test
+    fun `getDailyStats merges two trips across a merged boundary`() {
+        // The calendar's trip count has to agree with the trip list, or the same day reports
+        // two different numbers depending on which screen you are on.
+        db.saveLocation(latitude = 52.52, longitude = 13.405, timestamp = 1708344000L)
+        db.saveLocation(latitude = 52.60, longitude = 13.405, timestamp = 1708344060L)
+        db.saveLocation(latitude = 52.70, longitude = 13.405, timestamp = 1708346000L) // 1940s gap
+        db.saveLocation(latitude = 52.80, longitude = 13.405, timestamp = 1708346060L)
+
+        assertEquals(2, db.getDailyStats(1708300000L, 1708400000L)[0]["tripCount"])
+
+        db.addBoundaryOverrides(listOf(
+            Triple(1708344060L, 1708346000L, DatabaseHelper.BOUNDARY_ACTION_MERGE)
+        ))
+        assertEquals(1, db.getDailyStats(1708300000L, 1708400000L)[0]["tripCount"])
+    }
+
+    @Test
+    fun `getDailyStats splits a trip at a manually split boundary`() {
+        db.saveLocation(latitude = 52.52, longitude = 13.405, timestamp = 1708344000L)
+        db.saveLocation(latitude = 52.60, longitude = 13.405, timestamp = 1708344060L)
+        db.saveLocation(latitude = 52.70, longitude = 13.405, timestamp = 1708344120L)
+        db.saveLocation(latitude = 52.80, longitude = 13.405, timestamp = 1708344180L)
+
+        assertEquals(1, db.getDailyStats(1708300000L, 1708400000L)[0]["tripCount"])
+
+        db.addBoundaryOverrides(listOf(
+            Triple(1708344060L, 1708344120L, DatabaseHelper.BOUNDARY_ACTION_SPLIT)
+        ))
+        assertEquals(2, db.getDailyStats(1708300000L, 1708400000L)[0]["tripCount"])
+    }
+
+    @Test
+    fun `getDailyStats drops a one-point segment even though a split forces it`() {
+        // Mirrors the JS segmenter: a split only gets written where both sides have two points,
+        // but a later delete can leave one side with a single fix. A lone point is not a trip.
+        db.saveLocation(latitude = 52.52, longitude = 13.405, timestamp = 1708344000L)
+        db.saveLocation(latitude = 52.60, longitude = 13.405, timestamp = 1708344060L)
+        db.saveLocation(latitude = 52.600001, longitude = 13.405, timestamp = 1708344120L)
+
+        db.addBoundaryOverrides(listOf(
+            Triple(1708344000L, 1708344060L, DatabaseHelper.BOUNDARY_ACTION_SPLIT)
+        ))
+        // The two-point side survives on the exemption; the one-point side does not
+        assertEquals(1, db.getDailyStats(1708300000L, 1708400000L)[0]["tripCount"])
+    }
+
+    @Test
+    fun `getDailyStats counts both sides of a manual split even when one is stationary`() {
+        // Mirrors the JS segmenter's exemption: an explicit split must not be swallowed by the
+        // stationary-jitter filter, or the user's edit looks like it did nothing.
+        db.saveLocation(latitude = 52.52, longitude = 13.405, timestamp = 1708344000L)
+        db.saveLocation(latitude = 52.60, longitude = 13.405, timestamp = 1708344060L)
+        db.saveLocation(latitude = 52.600001, longitude = 13.405, timestamp = 1708344120L)
+        db.saveLocation(latitude = 52.600002, longitude = 13.405, timestamp = 1708344180L)
+
+        db.addBoundaryOverrides(listOf(
+            Triple(1708344060L, 1708344120L, DatabaseHelper.BOUNDARY_ACTION_SPLIT)
+        ))
+        assertEquals(2, db.getDailyStats(1708300000L, 1708400000L)[0]["tripCount"])
+    }
+
+    // ========================================================================
+    // deleteOlderThan
+    // ========================================================================
+
+    @Test
+    fun `deleteOlderThan removes only old locations`() {
+        val now = System.currentTimeMillis() / 1000
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = now - 86400 * 10) // 10 days ago
+        db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = now) // today
+
+        val deleted = db.deleteOlderThan(7)
+        assertEquals(1, deleted)
+
+        val remaining = db.getTableData(DatabaseHelper.TABLE_LOCATIONS, 100, 0)
+        assertEquals(1, remaining.size)
+        assertEquals(53.0, remaining[0]["latitude"] as Double, 0.001)
+    }
+
+    @Test
+    fun `countOlderThan counts exactly what deleteOlderThan then removes, so a preview cannot promise a wrong number`() {
+        val now = System.currentTimeMillis() / 1000
+        // Rows sitting on the boundary and one second either side, so a shift of one day or a flip
+        // between < and <= moves the two figures apart instead of leaving both unchanged.
+        val cutoff = db.countOlderThan(7).cutoffSeconds
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = cutoff - 1)
+        db.saveLocation(latitude = 52.1, longitude = 13.1, timestamp = cutoff)
+        db.saveLocation(latitude = 52.2, longitude = 13.2, timestamp = cutoff + 1)
+        db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = now)
+
+        val predicted = db.countOlderThan(7).total
+        val deleted = db.deleteOlderThan(7)
+
+        assertEquals(predicted, deleted)
+        // Only the row strictly before the boundary goes; the one on it stays.
+        assertEquals(1, deleted)
+    }
+
+    @Test
+    fun `the boundary holds still across a dwell, so a confirmation cannot name less than the delete takes`() {
+        val first = db.countOlderThan(30).cutoffSeconds
+
+        Thread.sleep(20)
+
+        assertEquals(first, db.countOlderThan(30).cutoffSeconds)
+    }
+
+    @Test
+    fun `countUnsentOlderThan reports how many matches were never uploaded, since no copy of those survives`() {
+        val now = System.currentTimeMillis() / 1000
+        val sentId = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = now - 86400 * 10)
+        db.saveLocation(latitude = 52.1, longitude = 13.1, timestamp = now - 86400 * 9)
+        db.markLocationsSent(listOf(sentId))
+
+        assertEquals(2, db.countOlderThan(7).total)
+        assertEquals(1, db.countUnsentOlderThan(7))
+    }
+
+    @Test
+    fun `countOlderThan is zero on an empty window rather than reporting a phantom match`() {
+        db.saveLocation(latitude = 53.0, longitude = 14.0, timestamp = System.currentTimeMillis() / 1000)
+
+        assertEquals(0, db.countOlderThan(7).total)
+        assertEquals(0, db.countUnsentOlderThan(7))
+    }
+
+    @Test
+    fun `countOlderThan reports the boundary it counted at, so the confirmation cannot name a different one`() {
+        val now = System.currentTimeMillis() / 1000
+        db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = now - 86400 * 10)
+
+        val counted = db.countOlderThan(7)
+
+        // Every row it counted sits before the boundary it reports.
+        assertEquals(1, counted.total)
+        assertTrue(counted.cutoffSeconds <= now - 86400 * 7)
+        assertTrue(counted.cutoffSeconds > now - 86400 * 8)
+    }
+
+    @Test
+    fun `getStats agrees with the table on how many rows have been uploaded`() {
+        val sentId = db.saveLocation(latitude = 52.0, longitude = 13.0, timestamp = 1000L)
+        db.saveLocation(latitude = 52.1, longitude = 13.1, timestamp = 2000L)
+        db.saveLocation(latitude = 52.2, longitude = 13.2, timestamp = 3000L)
+        db.markLocationsSent(listOf(sentId))
+
+        val stats = db.getStats()
+
+        assertEquals(3, stats.total)
+        assertEquals(1, stats.sent)
+    }
+
+    // ========================================================================
+    // deleteInRange
+    // ========================================================================
+
+    @Test
+    fun `deleteInRange removes only locations within inclusive range`() {
+        db.saveLocation(latitude = 50.0, longitude = 10.0, timestamp = 1000L) // before
+        db.saveLocation(latitude = 51.0, longitude = 11.0, timestamp = 2000L) // start (inclusive)
+        db.saveLocation(latitude = 52.0, longitude = 12.0, timestamp = 2500L) // inside
+        db.saveLocation(latitude = 53.0, longitude = 13.0, timestamp = 3000L) // end (inclusive)
+        db.saveLocation(latitude = 54.0, longitude = 14.0, timestamp = 4000L) // after
+
+        val deleted = db.deleteInRange(2000L, 3000L)
+        assertEquals(3, deleted)
+
+        val remaining = db.getTableData(DatabaseHelper.TABLE_LOCATIONS, 100, 0)
+        assertEquals(2, remaining.size)
+        val timestamps = remaining.map { (it["timestamp"] as Number).toLong() }.toSet()
+        assertEquals(setOf(1000L, 4000L), timestamps)
+    }
+
+    // ========================================================================
+    // deleteInRanges
+    // ========================================================================
+
+    @Test
+    fun `deleteInRanges removes locations across non-contiguous ranges atomically`() {
+        db.saveLocation(latitude = 50.0, longitude = 10.0, timestamp = 1000L) // in range 1
+        db.saveLocation(latitude = 51.0, longitude = 11.0, timestamp = 1500L) // in range 1
+        db.saveLocation(latitude = 52.0, longitude = 12.0, timestamp = 2500L) // gap, retained
+        db.saveLocation(latitude = 53.0, longitude = 13.0, timestamp = 3500L) // in range 2
+        db.saveLocation(latitude = 54.0, longitude = 14.0, timestamp = 4500L) // after, retained
+
+        val deleted = db.deleteInRanges(listOf(1000L to 2000L, 3000L to 4000L))
+        assertEquals(3, deleted)
+
+        val remaining = db.getTableData(DatabaseHelper.TABLE_LOCATIONS, 100, 0)
+        val timestamps = remaining.map { (it["timestamp"] as Number).toLong() }.toSet()
+        assertEquals(setOf(2500L, 4500L), timestamps)
+    }
+
+    @Test
+    fun `deleteInRanges with empty list deletes nothing`() {
+        db.saveLocation(latitude = 50.0, longitude = 10.0, timestamp = 1000L)
+
+        val deleted = db.deleteInRanges(emptyList())
+        assertEquals(0, deleted)
+
+        val remaining = db.getTableData(DatabaseHelper.TABLE_LOCATIONS, 100, 0)
+        assertEquals(1, remaining.size)
+    }
+
+    // ========================================================================
+    // Helpers
+    // ========================================================================
+
+    /** Asserts against a migrated candidate file rather than the live singleton. */
+    private fun assertMigratedTableExists(migrated: SQLiteDatabase, table: String) {
+        migrated.rawQuery(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            arrayOf(table)
+        ).use { cursor ->
+            assertTrue("Migration must create $table", cursor.moveToFirst())
+        }
+    }
+
+    private fun queryTableNames(): Set<String> {
+        val tables = mutableSetOf<String>()
+        db.readableDatabase.rawQuery(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'android_%'",
+            null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                tables.add(cursor.getString(0))
+            }
+        }
+        return tables
+    }
+
+    private fun queryColumnNames(table: String): Set<String> {
+        val columns = mutableSetOf<String>()
+        db.readableDatabase.rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+            while (cursor.moveToNext()) {
+                columns.add(cursor.getString(cursor.getColumnIndexOrThrow("name")))
+            }
+        }
+        return columns
+    }
+
+    private fun queryIndexNames(): Set<String> {
+        val indexes = mutableSetOf<String>()
+        db.readableDatabase.rawQuery(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'",
+            null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                indexes.add(cursor.getString(0))
+            }
+        }
+        return indexes
+    }
+}

@@ -217,7 +217,7 @@ describe("SettingsScreen", () => {
         ["nav-backup-restore", "Backup & Restore"],
         ["nav-share-setup", "Share Setup"],
         ["nav-logging", "Logging"],
-        ["nav-about", "About Colota"]
+        ["nav-about", "About ColotaEx"]
       ]
       for (const [testID, route] of routes) {
         fireEvent.press(api.getByTestId(testID))
@@ -421,12 +421,12 @@ describe("SettingsScreen", () => {
       const api = renderScreen()
       await waitFor(() => expect(mockGetStats).toHaveBeenCalled())
 
-      expect(api.getByText("github.com/dietrichmax/colota/issues")).toBeTruthy()
-      expect(api.getByText("colota.app/releases")).toBeTruthy()
+      expect(api.getByText("github.com/bedroomcult/colotaEx/issues")).toBeTruthy()
+      expect(api.getByText("github.com/bedroomcult/colotaEx/releases")).toBeTruthy()
       expect(api.getByText("mxd.codes/support")).toBeTruthy()
       expect(meta(api, "nav-feedback")[2]).toBe("link")
       expect(api.getByTestId("nav-feedback").props.accessibilityHint).toBe("Opens Feedback & help in the browser")
-      expect(api.getByTestId("nav-rate").props.accessibilityHint).toBe("Opens Colota in Google Play")
+      expect(api.getByTestId("nav-rate").props.accessibilityHint).toBe("Opens ColotaEx in Google Play")
       expect(meta(api, "nav-about")[2]).toBe("chevron")
     })
 
@@ -436,9 +436,9 @@ describe("SettingsScreen", () => {
       await waitFor(() => expect(mockGetStats).toHaveBeenCalled())
 
       fireEvent.press(api.getByTestId("nav-feedback"))
-      expect(spy).toHaveBeenLastCalledWith("https://github.com/dietrichmax/colota/issues")
+      expect(spy).toHaveBeenLastCalledWith("https://github.com/bedroomcult/colotaEx/issues")
       fireEvent.press(api.getByTestId("nav-whats-new"))
-      expect(spy).toHaveBeenLastCalledWith("https://colota.app/releases")
+      expect(spy).toHaveBeenLastCalledWith("https://github.com/bedroomcult/colotaEx/releases")
       fireEvent.press(api.getByTestId("nav-support"))
       expect(spy).toHaveBeenLastCalledWith("https://mxd.codes/support")
       spy.mockRestore()
@@ -453,7 +453,7 @@ describe("SettingsScreen", () => {
       await waitFor(() => expect(mockGetStats).toHaveBeenCalled())
 
       fireEvent.press(api.getByTestId("nav-rate"))
-      await waitFor(() => expect(spy).toHaveBeenCalledWith("https://play.google.com/store/apps/details?id=com.Colota"))
+      await waitFor(() => expect(spy).toHaveBeenCalledWith("https://play.google.com/store/apps/details?id=com.colotaex"))
 
       spy.mockRejectedValue(new Error("no browser"))
       fireEvent.press(api.getByTestId("nav-support"))

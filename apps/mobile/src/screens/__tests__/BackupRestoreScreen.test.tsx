@@ -309,7 +309,7 @@ describe("BackupRestoreScreen", () => {
       await openArchive(api)
 
       expect(api.getByText(/^Backup from /)).toBeTruthy()
-      expect(api.getByText("Colota 1.16.0 · opened with your password")).toBeTruthy()
+      expect(api.getByText("ColotaEx 1.16.0 · opened with your password")).toBeTruthy()
       expect(api.getByTestId("restore-btn").props.accessibilityValue.text).toBe("danger")
     })
 

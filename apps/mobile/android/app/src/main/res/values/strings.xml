@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name" translatable="false">Colota</string>
+    <string name="app_name" translatable="false">ColotaEx</string>
     <string name="shortcut_start_short">Start</string>
     <string name="shortcut_start_long">Start Tracking</string>
     <string name="shortcut_stop_short">Stop</string>
@@ -56,8 +56,8 @@
     <string name="stop_reason_automation">Stopped via automation intent</string>
     <string name="stop_reason_other">Stopped</string>
 
-    <string name="toast_tracking_started">Colota tracking started</string>
-    <string name="toast_tracking_stopped">Colota tracking stopped</string>
+    <string name="toast_tracking_started">ColotaEx tracking started</string>
+    <string name="toast_tracking_stopped">ColotaEx tracking stopped</string>
 
     <string name="auto_export_title">Auto-Export</string>
     <string name="auto_export_running">Exporting location data...</string>
@@ -75,7 +75,7 @@
     <string name="auto_export_save_failed">Could not save export file. Will retry.</string>
     <string name="auto_export_gave_up">Export failed after multiple attempts. Please check your settings.</string>
 
-    <string name="backup_title">Colota Backup</string>
+    <string name="backup_title">ColotaEx Backup</string>
     <string name="backup_working">Working...</string>
     <string name="backup_encrypting">Encrypting backup...</string>
     <string name="backup_restoring">Restoring backup...</string>

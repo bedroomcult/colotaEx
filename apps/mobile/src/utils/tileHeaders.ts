@@ -5,7 +5,7 @@ import { REPO_URL } from "../constants"
 /** App name and version only. The privacy policy commits to carrying no per-install identifier. */
 export function tileServerUserAgent(): string {
   const version = NativeLocationService.getBuildConfig()?.VERSION_NAME ?? "dev"
-  return `Colota/${version} (+${REPO_URL})`
+  return `ColotaEx/${version} (+${REPO_URL})`
 }
 
 /** Applies to the default tile server and any custom one. Call before the first map mounts. */

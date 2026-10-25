@@ -77,7 +77,7 @@ describe("the wording a reporter acts on", () => {
     expect(logContentsLine()).toContain("geofences")
     expect(logContentsLine()).toContain("tracking profiles")
     expect(logContentsLine()).toContain("server host")
-    expect(logContentsLine()).toContain("Colota writes no coordinates")
+    expect(logContentsLine()).toContain("ColotaEx writes no coordinates")
     expect(logContentsLine()).toMatch(/rejected upload can carry your server/)
   })
 

@@ -31,7 +31,7 @@ export type RootStackParamList = {
   "Tracking Profiles": undefined
   "Profile Editor": { profileId?: number; bluetoothDevice?: BluetoothDeviceInfo } | undefined
   "Bluetooth Device": { selected?: BluetoothDeviceInfo } | undefined
-  "About Colota": undefined
+  "About ColotaEx": undefined
   "Setup Import": undefined
   "Share Setup": undefined
   "Trip Detail": { trip: Trip; trips: Trip[] }

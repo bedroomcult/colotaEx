@@ -58,7 +58,7 @@ jest.mock("../../components/features/map/ColotaMapView", () => {
       mockMapProps(props)
       return R.createElement(
         View,
-        { testID: "colota-map" },
+        { testID: "colotaex-map" },
         R.createElement(Pressable, { testID: "map-ready", onPress: () => props.onMapReady?.() }),
         R.createElement(Pressable, {
           testID: "map-pan",
@@ -182,7 +182,7 @@ function createProps() {
 
 async function renderReady(props = createProps()) {
   const utils = render(<GeofenceScreen {...props} />)
-  await waitFor(() => expect(utils.getByTestId("colota-map")).toBeTruthy())
+  await waitFor(() => expect(utils.getByTestId("colotaex-map")).toBeTruthy())
   fireEvent.press(utils.getByTestId("map-ready"))
   await act(async () => {})
   return { ...utils, props }
@@ -228,7 +228,7 @@ describe("GeofenceScreen", () => {
 
     const bar = headerRight(props)
     fireEvent.press(bar.getByLabelText("Share all geofences"))
-    await waitFor(() => expect(shareSpy).toHaveBeenCalledWith({ message: expect.stringContaining("colota://setup") }))
+    await waitFor(() => expect(shareSpy).toHaveBeenCalledWith({ message: expect.stringContaining("colotaex://setup") }))
 
     mockGetGeofences.mockResolvedValue([])
     const emptyProps = createProps()
@@ -293,7 +293,7 @@ describe("GeofenceScreen", () => {
     })
     await waitFor(() => expect(mockFitBounds).toHaveBeenCalledTimes(2))
     expect(mockFitBounds.mock.calls[1][1].duration).toBeGreaterThan(0)
-    expect(getByTestId("colota-map")).toBeTruthy()
+    expect(getByTestId("colotaex-map")).toBeTruthy()
   })
 
   it("offers a fit disc only after a pan, and hides it again once pressed", async () => {
@@ -332,7 +332,7 @@ describe("GeofenceScreen", () => {
     const { queryByTestId } = render(<GeofenceScreen {...createProps()} />)
     await act(async () => {})
 
-    expect(queryByTestId("colota-map")).toBeNull()
+    expect(queryByTestId("colotaex-map")).toBeNull()
   })
 
   it("draws the live dot only while tracking, greyed inside the geofence you are paused in", async () => {

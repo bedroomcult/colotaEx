@@ -289,7 +289,7 @@ export function SettingsScreen({ navigation }: Props) {
               testID="nav-feedback"
               icon={MessageCircle}
               label={t("settings.feedback")}
-              sub="github.com/dietrichmax/colota/issues"
+              sub="github.com/bedroomcult/colotaEx/issues"
               trailingIcon={ExternalLink}
               accessibilityRole="link"
               onPress={() => openLink(ISSUES_URL)}
@@ -299,7 +299,7 @@ export function SettingsScreen({ navigation }: Props) {
               testID="nav-whats-new"
               icon={Sparkles}
               label={t("settings.whatsNew")}
-              sub="colota.app/releases"
+              sub="github.com/bedroomcult/colotaEx/releases"
               trailingIcon={ExternalLink}
               accessibilityRole="link"
               onPress={() => openLink(RELEASES_URL)}
@@ -340,7 +340,7 @@ export function SettingsScreen({ navigation }: Props) {
               icon={Info}
               label={t("screen.aboutColota")}
               sub={t("settings.version", { version: versionLine(NativeLocationService.getBuildConfig()) })}
-              onPress={() => navigation.navigate("About Colota")}
+              onPress={() => navigation.navigate("About ColotaEx")}
             />
           </Card>
         </View>

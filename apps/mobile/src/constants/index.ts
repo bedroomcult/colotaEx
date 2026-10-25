@@ -141,11 +141,11 @@ export const MAP_STYLE_URL_LIGHT = "https://maps.mxd.codes/styles/bright/style.j
 export const MAP_STYLE_URL_DARK = "https://maps.mxd.codes/styles/dark/style.json"
 
 // URLs
-export const REPO_URL = "https://github.com/dietrichmax/colota"
+export const REPO_URL = "https://github.com/bedroomcult/colotaEx"
 export const ISSUES_URL = `${REPO_URL}/issues`
-export const PRIVACY_POLICY_URL = "https://colota.app/privacy-policy"
-export const RELEASES_URL = "https://colota.app/releases"
+export const PRIVACY_POLICY_URL = "https://github.com/bedroomcult/colotaEx/blob/main/apps/docs/src/pages/privacy-policy.md"
+export const RELEASES_URL = "https://github.com/bedroomcult/colotaEx/releases"
 export const SUPPORT_URL = "https://mxd.codes/support"
 /** market:// opens the Play app straight on the listing; the https form is the fallback. */
-export const PLAY_STORE_MARKET_URL = "market://details?id=com.Colota"
-export const PLAY_STORE_WEB_URL = "https://play.google.com/store/apps/details?id=com.Colota"
+export const PLAY_STORE_MARKET_URL = "market://details?id=com.colotaex"
+export const PLAY_STORE_WEB_URL = "https://play.google.com/store/apps/details?id=com.colotaex" // not published; Settings falls back to error dialog

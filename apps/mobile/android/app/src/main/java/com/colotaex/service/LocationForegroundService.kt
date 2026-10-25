@@ -1,0 +1,1717 @@
+/**
+ * Copyright (C) 2026 Max Dietrich
+ * Licensed under the GNU AGPLv3. See LICENSE in the project root for details.
+ */
+
+package com.colotaex.service
+
+import android.app.*
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import android.location.Location
+import android.location.LocationManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import androidx.core.content.ContextCompat
+import com.colotaex.BuildConfig
+import com.colotaex.bridge.LocationServiceModule
+import com.colotaex.util.AppLogger
+import com.colotaex.data.DatabaseHelper
+import com.colotaex.data.GeofenceHelper
+import com.colotaex.data.ProfileHelper
+import com.colotaex.data.SettingsKeys
+import com.colotaex.sync.ApiFormat
+import com.colotaex.sync.http.NetworkManager
+import com.colotaex.network.NetworkMonitor
+import com.colotaex.sync.PayloadBuilder
+import com.colotaex.sync.SyncManager
+import com.colotaex.util.DeviceInfoHelper
+import com.colotaex.util.SecureStorageHelper
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.*
+import androidx.core.app.ServiceCompat
+import com.colotaex.location.LocationProvider
+import com.colotaex.location.LocationProviderFactory
+import com.colotaex.location.LocationUpdateCallback
+import kotlinx.coroutines.*
+import kotlin.coroutines.resume
+import java.util.Locale
+
+/** Foreground service for continuous GPS tracking and location syncing. */
+class LocationForegroundService : Service() {
+
+    private lateinit var locationProvider: LocationProvider
+    private lateinit var notificationManager: NotificationManager
+    private lateinit var notificationHelper: NotificationHelper
+    private lateinit var dbHelper: DatabaseHelper
+    @Volatile private var payloadFieldMap: Map<String, String> = emptyMap()
+    @Volatile private var payloadCustomFields: Map<String, String> = emptyMap()
+    private lateinit var deviceInfoHelper: DeviceInfoHelper
+    private lateinit var networkManager: NetworkManager
+    private lateinit var networkMonitor: NetworkMonitor
+    private lateinit var geofenceHelper: GeofenceHelper
+    private lateinit var secureStorage: SecureStorageHelper
+    private lateinit var syncManager: SyncManager
+    private lateinit var profileHelper: ProfileHelper
+    private lateinit var profileManager: ProfileManager
+    private lateinit var conditionMonitor: ConditionMonitor
+    private lateinit var batteryMonitor: BatteryMonitor
+
+    // ── Service infrastructure ──
+    @Volatile private var serviceScope: CoroutineScope? = null
+    @Volatile private var locationUpdateCallback: LocationUpdateCallback? = null
+    @Volatile private var locationRestartJob: Job? = null
+    @Volatile private var trackingHeartbeatJob: Job? = null
+    @Volatile private var lastFixAtMs: Long = 0L
+    @Volatile private var lastFixAtUptimeMs: Long = 0L
+    @Volatile private var lastFixEpochMs: Long = 0L
+    private val startedAtMs: Long = System.currentTimeMillis()
+    @Volatile private var motionDetector: MotionStateDetector? = null
+    @Volatile private var lastKnownLocation: Location? = null
+
+    // Rate-limit the fresh-fix probe so repeated rechecks/resumes don't spin up GNSS. Main-thread only.
+    @Volatile private var lastFreshProbeAtMs: Long? = null
+    @Volatile private var freshProbeInFlight = false
+    @Volatile private var pauseWatchdogJob: Job? = null
+
+    /** Re-entry guard for stopForegroundServiceWithReason: the battery monitor can fire again
+     *  before onDestroy unregisters it. */
+    @Volatile private var isStopping = false
+
+    /** Debounces the burst of PROVIDERS_CHANGED broadcasts when system Location toggles (one per provider). */
+    @Volatile private var lastBroadcastLocationEnabled: Boolean = true
+
+    private val locationProvidersReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != LocationManager.PROVIDERS_CHANGED_ACTION) return
+            val current = deviceInfoHelper.isLocationEnabled()
+            if (current == lastBroadcastLocationEnabled) return
+            lastBroadcastLocationEnabled = current
+            AppLogger.d(TAG, "Location providers changed: enabled=$current")
+            LocationServiceModule.sendLocationStateEvent(current)
+            refreshNotificationForCurrentState()
+            if (current) conditionMonitor.onLocationEnabled()
+        }
+    }
+
+    /** Whether the currently-registered location request bypasses the OS-level distance filter. */
+    @Volatile private var lastRequestedBypassOsFilter: Boolean = false
+
+    /**
+     * Pause-zone state. Threading contract:
+     * - Mutated ONLY on the Main thread. Call sites: onStartCommand, enter/exitPauseZone,
+     *   activateWifiPause, unregisterWifiPause, clearMotionlessPauseState, onMotionStateChange,
+     *   and the bodies of Main-dispatched coroutines (registerWifiPause's NetworkCallback uses
+     *   Main Looper; wifiResumeJob switches to Dispatchers.Main before mutating).
+     * - Read from any thread (location callbacks, notification builder, heartbeat IO coroutine).
+     *   @Volatile exists for reader visibility, not mutation safety. Do NOT mutate off-Main.
+     */
+    @Volatile private var insidePauseZone = false
+    @Volatile private var currentZoneName: String? = null
+    @Volatile private var currentZoneGeofence: GeofenceHelper.Geofence? = null
+    @Volatile private var pendingPauseZone: GeofenceHelper.Geofence? = null
+    @Volatile private var entryDelayJob: Job? = null
+    @Volatile private var heartbeatArmed = false
+    @Volatile private var stationaryHeartbeatArmed = false
+
+    // WiFi pause sub-state (same Main-only mutation contract as above)
+    @Volatile private var isWifiPaused = false
+    @Volatile private var wifiCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var wifiResumeJob: Job? = null
+    // Main-only reads + writes (no cross-thread reads), so @Volatile is unnecessary here
+    private var unmeteredNetworkCount = 0
+
+    // Motionless pause sub-state (same Main-only mutation contract as above)
+    @Volatile private var isMotionlessPaused = false
+
+    @Volatile private lateinit var config: ServiceConfig
+
+    companion object {
+        private const val TAG = "LocationService"
+
+        // Polled by BackupServiceModule.pauseAllDbWriters before the restore swap.
+        @Volatile
+        @JvmStatic
+        var isRunning: Boolean = false
+            private set
+
+        /** True from the action dispatch in onStartCommand until onDestroy. */
+        @Volatile
+        @JvmStatic
+        var isStarted: Boolean = false
+            private set
+
+        /** Multiplier applied to the tracking interval for the geofence entry delay. */
+        private const val ENTRY_DELAY_MULTIPLIER = 3.5
+        /** Debounce before resuming GPS after unmetered network is lost (ms). */
+        private const val WIFI_RESUME_DEBOUNCE_MS = 2_000L
+        /** Cadence at which the tracking heartbeat logs time-since-last-fix for diagnostics. */
+        private const val TRACKING_HEARTBEAT_INTERVAL_MS = 5 * 60_000L
+
+        /** Stationary-jitter floor for the position-jump filter. */
+        private const val POSITION_JUMP_FILTER_MIN_IMPLIED_MPS = 20f
+        /** Implied speed must exceed chip-Doppler by this factor to count as a jump. */
+        private const val POSITION_JUMP_FILTER_RATIO = 5f
+        /** A reference coarser than this, like a cell-based probe fix after a Wi-Fi drop, cannot prove a jump. */
+        private const val POSITION_JUMP_FILTER_MAX_REFERENCE_ACCURACY_M = 200f
+        /** Gaps above this bypass the filter so post-resume fixes aren't dropped. */
+        private const val POSITION_JUMP_FILTER_WINDOW_MS = 300_000L
+
+        /** Timeout for the active fresh-fix probe (ms). */
+        private const val FRESH_FIX_TIMEOUT_MS = 30_000L
+        /** Safety cap on the heartbeat wakelock; must outlast the fix acquisition. */
+        private const val HEARTBEAT_WAKELOCK_TIMEOUT_MS = FRESH_FIX_TIMEOUT_MS + 5_000L
+        /** Minimum spacing between fresh-fix probes; throttled callers get the last-known fix. */
+        private const val FRESH_PROBE_MIN_INTERVAL_MS = 60_000L
+        /** A fix older than this by the monotonic clock isn't trusted to hold a pause - usually a stale/replayed fix. */
+        private const val STALE_FIX_THRESHOLD_MS = 5 * 60_000L
+        /** Paused-watchdog tick cadence and the floor for its stall threshold (#444). */
+        private const val PAUSE_WATCHDOG_INTERVAL_MS = 10 * 60_000L
+        /** The stream counts as stalled after this many tracking intervals without a fix (floored at
+         *  [PAUSE_WATCHDOG_INTERVAL_MS]), so a long interval isn't probed more often than configured. */
+        private const val PAUSE_WATCHDOG_STALL_INTERVALS = 2
+        /** Tracking intervals without a fix before the active stream is re-registered. */
+        private const val ACTIVE_STALL_INTERVALS = 5
+        /** Floor under that: several minutes without a fix is normal on a short interval, so a
+         *  tighter floor would re-register during ordinary sleep. */
+        private const val ACTIVE_STALL_FLOOR_MS = 10 * 60_000L
+
+        const val ACTION_MANUAL_FLUSH = "com.colotaex.ACTION_MANUAL_FLUSH"
+        const val ACTION_RECHECK_ZONE = "com.colotaex.RECHECK_PAUSE_ZONE"
+        const val ACTION_REFRESH_NOTIFICATION = "com.colotaex.REFRESH_NOTIFICATION"
+        const val ACTION_RECHECK_PROFILES = "com.colotaex.RECHECK_PROFILES"
+        /** Internal stop request from triggers (broadcast receiver, shortcut activity). */
+        const val ACTION_STOP_REQUEST = "com.colotaex.ACTION_STOP_REQUEST"
+        const val EXTRA_STOP_REASON = "stop_reason"
+        /** Debug-only: directly inject a MotionState transition. `--es state STATIONARY|MOVING`. */
+        const val ACTION_DEBUG_FORCE_MOTION = "com.colotaex.DEBUG_FORCE_MOTION"
+        /** Alarm delivery for the stationary-profile heartbeat; see [StationaryHeartbeatScheduler]. */
+        const val ACTION_STATIONARY_HEARTBEAT = "com.colotaex.STATIONARY_HEARTBEAT"
+        /** Alarm delivery for the geofence-zone heartbeat; see [GeofenceHeartbeatScheduler]. */
+        const val ACTION_GEOFENCE_HEARTBEAT = "com.colotaex.GEOFENCE_HEARTBEAT"
+
+        /** Actions that skip config reload and preserve current notification state. */
+        private val LIGHTWEIGHT_ACTIONS = setOf(
+            ACTION_MANUAL_FLUSH,
+            ACTION_RECHECK_ZONE,
+            ACTION_REFRESH_NOTIFICATION,
+            ACTION_RECHECK_PROFILES,
+            ACTION_STOP_REQUEST,
+            ACTION_STATIONARY_HEARTBEAT,
+            ACTION_GEOFENCE_HEARTBEAT
+        )
+
+        /**
+         * Start path for triggers the JS bridge didn't initiate (boot, charger recovery,
+         * automation): starts the service and fires onTrackingStarted so a foreground UI
+         * re-attaches its listener. The JS bridge start skips this - JS already knows.
+         * Callers handle exceptions; a background FGS start can throw on Android 12+.
+         */
+        @JvmStatic
+        fun startTracking(context: Context, dbHelper: DatabaseHelper, startedReason: String) {
+            val intent = Intent(context, LocationForegroundService::class.java)
+            ServiceConfig.fromDatabase(dbHelper).toIntent(intent)
+            context.startForegroundService(intent)
+            LocationServiceModule.sendTrackingStartedEvent(startedReason)
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        isRunning = true
+
+        serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+        locationProvider = LocationProviderFactory.create(this)
+        notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        dbHelper = DatabaseHelper.getInstance(this)
+        deviceInfoHelper = DeviceInfoHelper(this)
+        batteryMonitor = BatteryMonitor(this, deviceInfoHelper) { onBatteryCritical() }
+        lastBroadcastLocationEnabled = deviceInfoHelper.isLocationEnabled()
+        networkMonitor = NetworkMonitor(this)
+        networkManager = NetworkManager(this, networkMonitor)
+        geofenceHelper = GeofenceHelper(this)
+        secureStorage = SecureStorageHelper.getInstance(this)
+        syncManager = SyncManager(dbHelper, networkManager, networkMonitor, serviceScope!!)
+        profileHelper = ProfileHelper(this)
+        profileManager = ProfileManager(
+            profileHelper, serviceScope!!,
+            onConfigSwitch = { config ->
+                applyProfileConfig(config.interval, config.distance, config.syncInterval, config.conditionType)
+            },
+            onStationaryChanged = ::handleStationaryChanged
+        )
+        conditionMonitor = ConditionMonitor(this, networkMonitor, profileManager)
+
+        notificationHelper = NotificationHelper(this, notificationManager)
+        notificationHelper.createChannel()
+
+        motionDetector = RawSensorMotionDetector(this) {
+            currentZoneGeofence?.motionlessTimeoutMinutes
+                ?.let { it.coerceAtLeast(0) * 60_000L }
+                ?: RawSensorMotionDetector.DEFAULT_STATIONARY_DWELL_MS
+        }
+
+        registerLocationProvidersReceiver()
+        registerDebugMotionReceiver()
+
+        AppLogger.d(TAG, "Service created - provider: ${locationProvider.javaClass.simpleName}, motionSensor=${motionDetector?.isAvailable}")
+    }
+
+    private fun registerLocationProvidersReceiver() {
+        val filter = IntentFilter(LocationManager.PROVIDERS_CHANGED_ACTION)
+        ContextCompat.registerReceiver(this, locationProvidersReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+    }
+
+    private fun unregisterLocationProvidersReceiver() {
+        try { unregisterReceiver(locationProvidersReceiver) } catch (_: IllegalArgumentException) {}
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!::dbHelper.isInitialized) {
+            dbHelper = DatabaseHelper.getInstance(this)
+        }
+
+        val savedSettings = dbHelper.getAllSettings()
+        val shouldBeTracking = savedSettings[SettingsKeys.TRACKING_ENABLED]?.toBoolean() ?: false
+
+        // intent == null: Android restarted the service after OOM kill
+        if (intent == null && !shouldBeTracking) {
+            AppLogger.d(TAG, "System restart prevented")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        val requestedAction = intent?.action
+        // Captured before the config load below, which is what makes an instance warm.
+        val cold = !::config.isInitialized
+
+        // A lightweight wake can be the first thing a fresh instance sees. Running only its
+        // handler would leave a tracking notification over a service with no GPS stream and
+        // no sync, so run the full start instead.
+        val promoted = cold && shouldBeTracking &&
+            requestedAction in LIGHTWEIGHT_ACTIONS &&
+            requestedAction != ACTION_STOP_REQUEST
+        val action = if (promoted) null else requestedAction
+        val isLightweight = action in LIGHTWEIGHT_ACTIONS
+
+        AppLogger.d(
+            TAG,
+            "onStartCommand: action=${requestedAction ?: "START"}, lightweight=$isLightweight" +
+                if (promoted) " (promoted to full start)" else ""
+        )
+
+        // Skip config reload for lightweight actions, but if the service was
+        // killed and restarted by one, load from DB so SyncManager has an endpoint.
+        if (!isLightweight) {
+            loadConfigFromIntent(if (promoted) null else intent)
+        } else if (!::config.isInitialized) {
+            loadConfigFromIntent(null)
+        }
+
+        // Restore pause zone state so a restart without a cached location fix doesn't incorrectly resume tracking.
+        // An explicit start is trusted over the flag, which the bridge writes after starting us.
+        if (!insidePauseZone && (shouldBeTracking || !isLightweight)) {
+            val savedZone = savedSettings[SettingsKeys.PAUSE_ZONE_NAME]
+            if (!savedZone.isNullOrBlank()) {
+                insidePauseZone = true
+                currentZoneName = savedZone
+                val restoredGeofence = geofenceHelper.getGeofenceByName(savedZone)
+                currentZoneGeofence = restoredGeofence
+                if (restoredGeofence == null) {
+                    AppLogger.w(TAG, "Restored pause zone state: $savedZone (geofence not found in DB - heartbeat/wifi/motionless settings unavailable)")
+                } else {
+                    AppLogger.d(TAG, "Restored pause zone state: $savedZone (heartbeat=${restoredGeofence.heartbeatEnabled}, wifi=${restoredGeofence.pauseOnWifi}, motionless=${restoredGeofence.pauseOnMotionless})")
+                }
+                if (restoredGeofence?.pauseOnWifi == true) {
+                    // Also sets isWifiPaused synchronously if currently on unmetered network,
+                    // so setupLocationUpdates() won't start GPS before onAvailable fires.
+                    registerWifiPause()
+                }
+                restoreMotionlessHold(
+                    restoredGeofence,
+                    savedSettings[SettingsKeys.PAUSE_ZONE_MOTIONLESS_ACTIVE]?.toBoolean() == true
+                )
+                // The alarm's own handler records; doing it here too would double-record
+                if (restoredGeofence?.heartbeatEnabled == true && action != ACTION_GEOFENCE_HEARTBEAT) {
+                    startHeartbeat(
+                        restoredGeofence.heartbeatIntervalMinutes,
+                        firstDelayMs = remainingHeartbeatDelay(restoredGeofence.heartbeatIntervalMinutes)
+                    )
+                    AppLogger.d(TAG, "Restored heartbeat: ${restoredGeofence.heartbeatIntervalMinutes}min")
+                }
+                ensureMotionDetectorRunning()
+                // The detector starts out moving and releases the hold only on a change to moving
+                if (isMotionlessPaused) (motionDetector as? RawSensorMotionDetector)?.resyncStationaryBaseline()
+            }
+        }
+
+        // Must call startForeground within 5s
+        notificationManager.cancel(NotificationHelper.STOPPED_NOTIFICATION_ID)
+        try {
+            ServiceCompat.startForeground(
+                this,
+                NotificationHelper.NOTIFICATION_ID,
+                notificationHelper.buildForegroundNotification(statusInput()),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            )
+        } catch (e: Exception) {
+            val locationOff = e is SecurityException && !deviceInfoHelper.isLocationEnabled()
+            AppLogger.e(TAG, "Cannot start foreground service (${if (locationOff) "location services are off" else deniedStartCause(e)})", e)
+            // The user's intent survives a denied start; the watchdog retries it out of process.
+            // An explicit start is intent too, even before the bridge's async flag write lands.
+            if (shouldBeTracking || !isLightweight) {
+                if (locationOff) {
+                    // Nothing wakes a dead app when Location comes back on, so the user is told and the retry is short.
+                    TrackingWatchdogScheduler.scheduleLocationOffRetry(this)
+                    notificationManager.notify(
+                        NotificationHelper.STOPPED_NOTIFICATION_ID,
+                        notificationHelper.buildStoppedNotification(NotificationHelper.StopReason.LOCATION_OFF, unexpected = true)
+                    )
+                } else {
+                    TrackingWatchdogScheduler.schedule(this)
+                }
+            }
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // A stale alarm can wake a fresh instance after the user stopped tracking. Its handler
+        // would find nothing to do and nothing would stop the service it just created.
+        if (cold && isLightweight && !shouldBeTracking &&
+            action != ACTION_STOP_REQUEST && action != ACTION_MANUAL_FLUSH
+        ) {
+            AppLogger.d(TAG, "Lightweight wake on a cold service with tracking off - stopping")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        if (!isLightweight) {
+            startTrackingHeartbeatLogger()
+            dbHelper.saveSetting(SettingsKeys.TRACKING_ENABLED, "true")
+            dbHelper.saveSetting(SettingsKeys.STOPPED_BY_BATTERY, "false")
+            BatteryRecoveryScheduler.cancel(this)
+            TrackingWatchdogScheduler.schedule(this)
+            batteryMonitor.start()
+        }
+
+        isStarted = true
+
+        when (action) {
+            ACTION_REFRESH_NOTIFICATION -> handleRefreshNotification()
+            ACTION_RECHECK_ZONE -> handleZoneRecheckAction()
+            ACTION_RECHECK_PROFILES -> handleRecheckProfiles()
+            ACTION_MANUAL_FLUSH -> handleManualFlush(stopAfter = !shouldBeTracking)
+            ACTION_STATIONARY_HEARTBEAT -> handleStationaryHeartbeatFired()
+            ACTION_GEOFENCE_HEARTBEAT -> handleGeofenceHeartbeatFired(shouldBeTracking)
+            ACTION_STOP_REQUEST -> stopForegroundServiceWithReason(
+                intent?.getStringExtra(EXTRA_STOP_REASON)
+                    ?.let { name -> NotificationHelper.StopReason.entries.firstOrNull { it.name == name } }
+                    ?: NotificationHelper.StopReason.OTHER,
+                unexpected = false
+            )
+            else -> handleStart()
+        }
+
+        return START_STICKY
+    }
+
+    private fun handleRefreshNotification() {
+        syncManager.invalidateQueueCache()
+        updateNotification(forceUpdate = true)
+    }
+
+    private fun handleRecheckProfiles() {
+        profileManager.invalidateProfiles()
+        conditionMonitor.start()
+        profileManager.evaluate()
+        // evaluate() may have triggered a profile switch, which already restarts the
+        // location request. Compare what is currently registered with what is now needed;
+        // only restart when they differ (eg user enabled a speed profile while no profile
+        // matches yet, so evaluate() didn't switch anything).
+        if (isLocationUpdatesRegistered() && needsLocationStreamForProfiles() != lastRequestedBypassOsFilter) {
+            stopLocationUpdates()
+            setupLocationUpdates()
+        }
+    }
+
+    /** [stopAfter] when the flush is the only reason this service exists, so it doesn't linger. */
+    private fun handleManualFlush(stopAfter: Boolean) {
+        serviceScope?.launch {
+            syncManager.manualFlush()
+            if (stopAfter) stopSelf()
+        }
+    }
+
+    private fun handleStart() {
+        locationRestartJob?.cancel()
+        locationRestartJob = serviceScope?.launch {
+            withContext(Dispatchers.Main) {
+                stopLocationUpdates()
+                syncManager.stopPeriodicSync()
+
+                setupLocationUpdates(skipEntryDelay = true)
+                syncManager.startPeriodicSync()
+
+                // Start after setup so profile evaluations don't race
+                // with setupLocationUpdates above
+                conditionMonitor.start()
+            }
+
+            if (!config.isOfflineMode && config.syncIntervalSeconds == 0 && config.endpoint.isNotBlank() &&
+                syncManager.isSyncAllowed()) {
+                syncManager.manualFlush()
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        AppLogger.d(TAG, "Service destroyed")
+
+        // Isolated per step: a skipped stopLocationUpdates leaves this instance receiving fixes
+        // the cancelled scope below can no longer save.
+        teardownStep("motionDetector") { motionDetector?.stop() }
+        teardownStep("entryDelay") {
+            entryDelayJob?.cancel()
+            entryDelayJob = null
+            pendingPauseZone = null
+        }
+        teardownStep("wifiPause") { unregisterWifiPause() }
+        teardownStep("heartbeat") { cancelHeartbeat() }
+        teardownStep("stationaryHeartbeat") { cancelStationaryHeartbeat() }
+        teardownStep("locationProvidersReceiver") { unregisterLocationProvidersReceiver() }
+        teardownStep("debugMotionReceiver") { unregisterDebugMotionReceiver() }
+        teardownStep("batteryMonitor") { batteryMonitor.stop() }
+        teardownStep("conditionMonitor") { conditionMonitor.stop() }
+        teardownStep("locationUpdates") { stopLocationUpdates() }
+        teardownStep("trackingHeartbeatLogger") { cancelTrackingHeartbeatLogger() }
+        teardownStep("periodicSync") { syncManager.stopPeriodicSync() }
+        teardownStep("networkMonitor") { networkMonitor.destroy() }
+
+        // Critical teardown: must run so pauseAllDbWriters' poll loop sees isRunning=false.
+        serviceScope?.cancel()
+        serviceScope = null
+
+        notificationManager.cancel(NotificationHelper.NOTIFICATION_ID)
+        isStarted = false
+        isRunning = false
+        super.onDestroy()
+    }
+
+    /** Teardown DB writes throw during a restore; the state is overwritten by the swap anyway. */
+    private fun teardownStep(name: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: IllegalStateException) {
+            AppLogger.w(TAG, "Teardown step '$name' skipped: ${e.message}")
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "Unexpected error during teardown step '$name'", e)
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        AppLogger.d(TAG, "Task removed (started=$isStarted)")
+        super.onTaskRemoved(rootIntent)
+    }
+
+    private fun setupLocationUpdates(skipEntryDelay: Boolean = false) {
+        if (isWifiPaused || isMotionlessPaused) return  // GPS intentionally stopped by a zone pause hold
+
+        // The resume paths reach here without a stop, and the assignment below would orphan the old
+        // callback with no reference left to unregister it.
+        locationUpdateCallback?.let { locationProvider.removeLocationUpdates(it) }
+
+        val callback = object : LocationUpdateCallback {
+            override fun onLocationUpdate(location: Location) {
+                // Only onDestroy nulls the scope, so this instance is dead and the OS is still
+                // feeding it - every fix below would be discarded silently.
+                if (serviceScope == null) {
+                    AppLogger.e(TAG, "Location received after destroy - removing leaked location updates")
+                    locationProvider.removeLocationUpdates(this)
+                    return
+                }
+                lastFixAtMs = SystemClock.elapsedRealtime()
+                lastFixAtUptimeMs = SystemClock.uptimeMillis()
+                handleLocationUpdate(location)
+            }
+        }
+        locationUpdateCallback = callback
+        lastFixAtMs = SystemClock.elapsedRealtime()
+        lastFixAtUptimeMs = SystemClock.uptimeMillis()
+
+        if (deviceInfoHelper.isBatteryCritical()) {
+            val (level, _) = deviceInfoHelper.getCachedBatteryStatus()
+            AppLogger.d(TAG, "Battery critical ($level%) and unplugged - stopping service")
+            stopForegroundServiceWithReason(NotificationHelper.StopReason.BATTERY, stoppedByBattery = true)
+            return
+        }
+
+        val bypassOsFilter = needsLocationStreamForProfiles()
+        val osMinDistance = if (bypassOsFilter) 0f else config.minUpdateDistance
+        
+        AppLogger.d(TAG, "Requesting location updates: interval=${config.interval}ms, distance=${config.minUpdateDistance}m, osFilter=${osMinDistance}m, accuracyMode=${config.accuracyMode.wireName}")
+
+        try {
+            locationProvider.requestLocationUpdates(
+                intervalMs = config.interval,
+                minDistanceMeters = osMinDistance,
+                accuracy = config.accuracyMode,
+                looper = Looper.getMainLooper(),
+                callback = callback
+            )
+            lastRequestedBypassOsFilter = bypassOsFilter
+
+            // A restored pause must be re-checked against a fresh fix: a cached fix can only re-enter,
+            // never exit, so a departed user would stay latched. A usable fix resumes only if it places
+            // us outside the zone (via recheck); with no usable fix, hold the pause - the watchdog resumes
+            // once a real fix confirms a departure. Only a full start latches a pause from a fresh last-known fix;
+            // any other restart goes through the entry delay, so the arrival points are still recorded.
+            val restoredPause = insidePauseZone
+            if (restoredPause) {
+                requestFreshOrLastLocation { location, _ ->
+                    if (location != null) {
+                        lastKnownLocation = location
+                        recheckZoneWithLocation(location)
+                    }
+                }
+            } else {
+                locationProvider.getLastLocation(
+                    onSuccess = { location ->
+                        if (insidePauseZone) return@getLastLocation
+                        if (location != null && isFixFresh(location)) {
+                            lastKnownLocation = location
+                            geofenceHelper.getPauseZone(location)?.let { zone ->
+                                if (skipEntryDelay) enterPauseZone(zone)
+                                else startEntryDelay(zone)
+                            } ?: run {
+                                updateNotification(forceUpdate = true)
+                            }
+                        }
+                    },
+                    onFailure = { /* initial location unavailable, updates will arrive */ }
+                )
+            }
+
+            startPauseWatchdog()
+        } catch (e: SecurityException) {
+            AppLogger.e(TAG, "Location permission missing", e)
+            stopForegroundServiceWithReason(NotificationHelper.StopReason.PERMISSION)
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "Failed to start location updates", e)
+            stopForegroundServiceWithReason(NotificationHelper.StopReason.PROVIDER)
+        }
+    }
+
+    /** Matched by name because the class is API 31+ and its IllegalStateException superclass is too broad. */
+    private fun deniedStartCause(e: Exception): String = when {
+        e.javaClass.simpleName == "ForegroundServiceStartNotAllowedException" -> "background start not allowed"
+        e is SecurityException -> "missing foreground-service location permission"
+        else -> e.javaClass.simpleName
+    }
+
+    private fun stopLocationUpdates() {
+        // The heartbeat logger outlives the stream; the watchdog only probes while it is live.
+        stopPauseWatchdog()
+        locationUpdateCallback?.let { locationProvider.removeLocationUpdates(it) }
+        locationUpdateCallback = null
+    }
+
+    /**
+     * True when at least one enabled profile's condition depends on the location stream
+     * (speed or stationary). When true, [setupLocationUpdates] passes 0m to the OS provider
+     * so fixes keep arriving within the configured movement threshold; the software-side
+     * filter in [handleLocationUpdate] still enforces it before DB writes and sync.
+     */
+    private fun needsLocationStreamForProfiles(): Boolean =
+        profileManager.getNeededConditionTypes().any { it in ProfileConstants.LOCATION_DEPENDENT_CONDITIONS }
+
+    private fun isLocationUpdatesRegistered(): Boolean = locationUpdateCallback != null
+
+    /** Logs a state snapshot every 5 minutes so silent stalls and pause/stop gaps are visible
+     *  in user-exported logs, and re-registers a stream that has gone quiet while active. */
+    private fun startTrackingHeartbeatLogger() {
+        // onStartCommand re-enters often; restarting would reset the interval before it ever fires.
+        if (trackingHeartbeatJob?.isActive == true) return
+        val scope = serviceScope ?: return
+        trackingHeartbeatJob = scope.launch {
+            while (isActive) {
+                delay(TRACKING_HEARTBEAT_INTERVAL_MS)
+                // Catch here so a DB or system-service hiccup doesn't kill the heartbeat loop.
+                try {
+                    val state = trackingStateLabel()
+                    val (battery, _) = deviceInfoHelper.getCachedBatteryStatus()
+                    val doze = (getSystemService(POWER_SERVICE) as? PowerManager)?.isDeviceIdleMode ?: false
+                    AppLogger.i(TAG,
+                        "Heartbeat state=$state, ${sinceLastFixLabel()}, " +
+                            "queue=${dbHelper.getQueuedCount()}, batt=$battery%, " +
+                            "profile=${profileManager.getActiveProfileName() ?: "default"}, doze=$doze"
+                    )
+                } catch (e: Exception) {
+                    AppLogger.w(TAG, "Heartbeat snapshot failed: ${e.message}")
+                }
+                try {
+                    withContext(Dispatchers.Main) { recoverStalledStream() }
+                } catch (e: CancellationException) {
+                    throw e  // service teardown; swallowing it would outlive the scope
+                } catch (e: Exception) {
+                    AppLogger.w(TAG, "Stall recovery failed: ${e.message}")
+                }
+            }
+        }
+    }
+
+    /** Re-registers the stream after [ACTIVE_STALL_INTERVALS] intervals of silence. The pause
+     *  watchdog only probes inside a zone, so a stream that dies while active stays dead. */
+    private fun recoverStalledStream() {
+        if (!isLocationUpdatesRegistered() || insidePauseZone || isWifiPaused || isMotionlessPaused) return
+        // The OS hands out no fixes while location is off, and the request survives the toggle.
+        if (!deviceInfoHelper.isLocationEnabled()) return
+        // Awake time, not wall clock: deep sleep produces no fixes by design.
+        val awakeSinceLastFix = SystemClock.uptimeMillis() - lastFixAtUptimeMs
+        val stallThresholdMs = maxOf(ACTIVE_STALL_FLOOR_MS, config.interval * ACTIVE_STALL_INTERVALS)
+        if (awakeSinceLastFix < stallThresholdMs) return
+        val wallSinceLastFix = SystemClock.elapsedRealtime() - lastFixAtMs
+        AppLogger.w(TAG, "Stream quiet ${awakeSinceLastFix / 1000}s awake (${wallSinceLastFix / 1000}s wall) while active - re-registering location updates")
+        stopLocationUpdates()
+        setupLocationUpdates()
+    }
+
+    /** Holds come first: both stop the stream, which is what a null callback means. */
+    private fun trackingStateLabel(): String = when {
+        isWifiPaused && isMotionlessPaused -> "PAUSED(wifi+motionless)"
+        isWifiPaused -> "PAUSED(wifi)"
+        isMotionlessPaused -> "PAUSED(motionless)"
+        locationUpdateCallback == null -> "STOPPED"
+        insidePauseZone -> "PAUSED(zone)"
+        else -> "ACTIVE"
+    }
+
+    /** 0 means nothing has stamped the field since this instance started (a restart under a hold never
+     *  registers the stream), and elapsedRealtime() - 0 is the phone's uptime, not a fix age. */
+    private fun sinceLastFixLabel(): String =
+        if (lastFixAtMs == 0L) "no location stream this instance"
+        else "${(SystemClock.elapsedRealtime() - lastFixAtMs) / 1000}s since last fix"
+
+    private fun cancelTrackingHeartbeatLogger() {
+        trackingHeartbeatJob?.cancel()
+        trackingHeartbeatJob = null
+    }
+
+    /**
+     * Fresh fix (no cached locations), falling back to last-known on timeout. Rate-limited to one
+     * probe in flight and one per [FRESH_PROBE_MIN_INTERVAL_MS]; throttled callers get last-known.
+     * The callback's second arg is true only when a fresh probe actually ran (false when throttled),
+     * so a caller won't force-exit on a throttled stale fallback. Main-thread only, so it's race-free.
+     */
+    private fun requestFreshOrLastLocation(onResult: (Location?, Boolean) -> Unit) {
+        val now = SystemClock.elapsedRealtime()
+        val last = lastFreshProbeAtMs
+        if (freshProbeInFlight || (last != null && now - last < FRESH_PROBE_MIN_INTERVAL_MS)) {
+            AppLogger.d(TAG, "Fresh-fix probe throttled (inFlight=$freshProbeInFlight) - using last-known")
+            deliverLastKnownIfFresh { onResult(it, false) }
+            return
+        }
+
+        freshProbeInFlight = true
+        lastFreshProbeAtMs = now
+        locationProvider.getCurrentLocation(FRESH_FIX_TIMEOUT_MS) { fresh ->
+            freshProbeInFlight = false
+            if (fresh != null && isFixFresh(fresh)) {
+                onResult(fresh, true)
+            } else {
+                // A non-null but stale probe (some chips replay a cached fix on a refreshed timestamp
+                // despite maxUpdateAge=0) must not re-confirm the pause - fall through to last-known.
+                deliverLastKnownIfFresh { onResult(it, true) }
+            }
+        }
+    }
+
+    /**
+     * Serves the last-known fix only if recent. A stale one is usually the in-zone fix that latched
+     * the pause, so it's reported as null - letting paused callers force-exit instead of re-latching.
+     */
+    private fun deliverLastKnownIfFresh(onResult: (Location?) -> Unit) {
+        locationProvider.getLastLocation(
+            onSuccess = { location ->
+                if (location != null && isFixFresh(location)) {
+                    onResult(location)
+                } else {
+                    if (location != null) AppLogger.d(TAG, "Last-known fix is stale - treating as no fix")
+                    onResult(null)
+                }
+            },
+            onFailure = { onResult(null) }
+        )
+    }
+
+    /**
+     * Freshness by the monotonic clock (elapsedRealtimeNanos), which a chip cannot refresh when it
+     * replays a cached fix - unlike wall-clock time. Used to reject a stale fix on any recovery path.
+     */
+    private fun isFixFresh(location: Location): Boolean {
+        val ageMs = (SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / 1_000_000L
+        return ageMs < STALE_FIX_THRESHOLD_MS
+    }
+
+    /**
+     * Periodically re-evaluates the pause zone against a fresh fix so a departure resumes without
+     * the user opening the app. Tied to the GPS-stream lifecycle like the heartbeat logger; each
+     * tick self-gates (see [runPauseWatchdogTick]).
+     */
+    private fun startPauseWatchdog() {
+        pauseWatchdogJob?.cancel()
+        val scope = serviceScope ?: return
+        pauseWatchdogJob = scope.launch {
+            while (isActive) {
+                delay(PAUSE_WATCHDOG_INTERVAL_MS)
+                withContext(Dispatchers.Main) { runPauseWatchdogTick() }
+            }
+        }
+    }
+
+    private fun stopPauseWatchdog() {
+        pauseWatchdogJob?.cancel()
+        pauseWatchdogJob = null
+    }
+
+    private fun runPauseWatchdogTick() {
+        // Wifi/motionless holds stop GPS and own their own resume - don't probe over them.
+        if (!insidePauseZone || isWifiPaused || isMotionlessPaused) return
+        // Only probe once the stream has been quiet longer than the interval would explain (a real stall).
+        val sinceLastFix = SystemClock.elapsedRealtime() - lastFixAtMs
+        val quietThresholdMs = maxOf(PAUSE_WATCHDOG_INTERVAL_MS, config.interval * PAUSE_WATCHDOG_STALL_INTERVALS)
+        if (sinceLastFix < quietThresholdMs) return
+        AppLogger.i(TAG, "Pause watchdog: stream quiet ${sinceLastFix / 1000}s - re-evaluating zone")
+        requestFreshOrLastLocation { location, _ ->
+            // Act only on a usable fix - a stale/absent one leaves the pause untouched (no home false-exits).
+            location?.let {
+                lastKnownLocation = it
+                recheckZoneWithLocation(it)
+            }
+        }
+    }
+
+    private fun handleZoneRecheckAction() {
+        // A cached fix while paused is usually the stale home fix - force a fresh one so a departure exits.
+        if (insidePauseZone) {
+            // Holds own their resume: re-evaluate on the last fix so a zone edit applies, without probing.
+            if (isWifiPaused || isMotionlessPaused) {
+                val cached = lastKnownLocation
+                if (cached != null) {
+                    recheckZoneWithLocation(cached)
+                } else {
+                    // A restart under a hold never gets a fix, so settle the edit from the zone row.
+                    val zone = currentZoneName?.let { geofenceHelper.getGeofenceByName(it) }
+                    if (zone == null) exitPauseZone() else applyZoneSettingsIfChanged(zone)
+                }
+                return
+            }
+            requestFreshOrLastLocation { location, probed ->
+                if (location != null) {
+                    lastKnownLocation = location
+                    recheckZoneWithLocation(location)
+                } else if (probed) {
+                    // Only a genuine probe that found nothing exits. A throttled stale fallback must
+                    // not fabricate a departure while genuinely at home (eg an edit right after a watchdog probe).
+                    AppLogger.d(TAG, "No location for recheck, forcing exit from zone")
+                    exitPauseZone()
+                }
+            }
+            return
+        }
+
+        val cachedLoc = lastKnownLocation
+        val now = System.currentTimeMillis()
+
+        if (cachedLoc != null && (now - cachedLoc.time) < 60_000) {
+            recheckZoneWithLocation(cachedLoc)
+        } else {
+            locationProvider.getLastLocation(
+                onSuccess = { location ->
+                    if (location != null) {
+                        lastKnownLocation = location
+                        recheckZoneWithLocation(location)
+                    }
+                },
+                onFailure = { e ->
+                    AppLogger.e(TAG, "Recheck error", e)
+                }
+            )
+        }
+    }
+
+
+    private fun recheckZoneWithLocation(location: Location) {
+        val zone = geofenceHelper.getPauseZone(location)
+
+        // Already inside this zone - refresh settings in case they changed via editor
+        if (zone != null && insidePauseZone && zone.name == currentZoneName) {
+            applyZoneSettingsIfChanged(zone)
+            updateNotification(forceUpdate = true)
+            val reason = when {
+                isWifiPaused -> "wifi"
+                isMotionlessPaused -> "motionless"
+                else -> null
+            }
+            LocationServiceModule.sendPauseZoneEvent(true, currentZoneName, reason)
+            return
+        }
+
+        applyZoneTransition(zone)
+
+        if (zone == null && !insidePauseZone && pendingPauseZone == null) {
+            updateNotification(forceUpdate = true)
+        }
+    }
+
+    /**
+     * Re-applies WiFi/motionless pause settings from a freshly loaded zone object.
+     * Called on RECHECK when already inside the zone so editor changes take effect immediately.
+     */
+    private fun applyZoneSettingsIfChanged(zone: GeofenceHelper.Geofence) {
+        val previousZone = currentZoneGeofence
+        val heartbeatChanged = previousZone?.heartbeatIntervalMinutes != zone.heartbeatIntervalMinutes
+        // Switching the heartbeat on from the editor is an arrival as far as the user is concerned,
+        // so it records at once. A restore or an interval change is not.
+        val heartbeatJustEnabled = previousZone?.heartbeatEnabled != true && zone.heartbeatEnabled
+        currentZoneGeofence = zone
+
+        if (zone.pauseOnWifi && wifiCallback == null) {
+            registerWifiPause()
+        } else if (!zone.pauseOnWifi) {
+            if (isWifiPaused) {
+                isWifiPaused = false
+                maybeResumeGps()
+            }
+            unregisterWifiPause()
+        }
+
+        if (!zone.pauseOnMotionless && isMotionlessPaused) {
+            clearMotionlessPauseState()
+            maybeResumeGps()
+        }
+        ensureMotionDetectorRunning()
+
+        // Resume on state, not on a flag transition: a restore that dropped a stale motionless hold
+        // leaves no request behind, and a lightweight action never runs handleStart to make one.
+        if (!isLocationUpdatesRegistered()) maybeResumeGps()
+
+        if (zone.heartbeatEnabled && (!heartbeatArmed || heartbeatChanged)) {
+            val firstDelayMs =
+                if (heartbeatJustEnabled) 0L else remainingHeartbeatDelay(zone.heartbeatIntervalMinutes)
+            startHeartbeat(zone.heartbeatIntervalMinutes, firstDelayMs)
+        } else if (!zone.heartbeatEnabled) {
+            cancelHeartbeat()
+        }
+    }
+
+    /**
+     * Applies zone entry/exit state transitions common to both live location updates
+     * and manual zone rechecks. Returns the anchor [Job] if a zone exit was triggered.
+     */
+    private fun applyZoneTransition(zone: GeofenceHelper.Geofence?): Job? {
+        return when {
+            zone != null && (!insidePauseZone || zone.name != currentZoneName) -> {
+                startEntryDelay(zone)
+                null
+            }
+            zone == null && pendingPauseZone != null -> { cancelEntryDelay(); null }
+            zone == null && insidePauseZone -> exitPauseZone()
+            else -> null
+        }
+    }
+
+    /** Derives speed from consecutive GPS points when the device doesn't report it. */
+    private fun applySpeedFallback(location: Location) {
+        if (location.hasSpeed()) return
+
+        val prev = lastKnownLocation ?: return
+
+        val timeDeltaMs = location.time - prev.time
+        if (timeDeltaMs < 1000 || timeDeltaMs > 60_000) return
+
+        val distanceMeters = prev.distanceTo(location)
+        val calculatedSpeed = distanceMeters / (timeDeltaMs / 1000.0f)
+
+        if (calculatedSpeed > 278f) return  // ~1000 km/h, reject GPS jitter
+
+        location.speed = calculatedSpeed
+    }
+
+    private fun handleLocationUpdate(location: Location) {
+        // Stamped before the filters: the header time is the last fix received, saved or not.
+        lastFixEpochMs = location.time
+        updateNotification()
+        if (config.filterInaccurateLocations && location.accuracy > config.accuracyThreshold) {
+            AppLogger.d(TAG, "Location filtered: accuracy ${location.accuracy}m > threshold ${config.accuracyThreshold}m")
+            return
+        }
+
+        // Deduplicate: FLP can redeliver the same fix to a newly registered listener
+        val prev = lastKnownLocation
+        if (prev != null && location.time == prev.time
+            && location.latitude == prev.latitude
+            && location.longitude == prev.longitude) {
+            AppLogger.d(TAG, "Duplicate location skipped (same timestamp and coords)")
+            return
+        }
+
+        // Position-jump filter: chip-reported and implied speed are independent signals; large disagreement means the chip hallucinated position.
+        // Kept active while paused too: a real departure passes it anyway (implied speed agrees with
+        // chip, or is below the floor), but one hallucinated jump must not fake a departure.
+        if (prev != null && location.hasSpeed() && prev.accuracy <= POSITION_JUMP_FILTER_MAX_REFERENCE_ACCURACY_M) {
+            val dt = location.time - prev.time
+            if (dt in 1000..POSITION_JUMP_FILTER_WINDOW_MS) {
+                val distance = prev.distanceTo(location)
+                val implied = distance / (dt / 1000f)
+                if (implied > POSITION_JUMP_FILTER_MIN_IMPLIED_MPS
+                    && implied > location.speed * POSITION_JUMP_FILTER_RATIO) {
+                    AppLogger.w(TAG, "Location filtered: implied ${String.format(Locale.US, "%.1f", implied)}m/s vs chip ${String.format(Locale.US, "%.1f", location.speed)}m/s (dist ${String.format(Locale.US, "%.1f", distance)}m, dt ${dt}ms)")
+                    return
+                }
+            }
+        }
+
+        applySpeedFallback(location)
+
+        // Before distance filter so stationary locations still update the speed buffer
+        profileManager.onLocationUpdate(location)
+
+        // Software-side distance filter. Enforces config.minUpdateDistance for DB/sync
+        // regardless of the OS filter (which passes 0m to when a location-dependent
+        // profile is enabled). Bypassed during entry delay so arrival points get logged, and while
+        // paused so a small step across the radius reaches the zone-exit check (the radius still gates it).
+        if (!insidePauseZone && pendingPauseZone == null && config.minUpdateDistance > 0f && prev != null) {
+            val distance = prev.distanceTo(location)
+            if (distance < config.minUpdateDistance) {
+                AppLogger.d(TAG, "Location filtered: distance ${String.format(Locale.US, "%.1f", distance)}m < threshold ${config.minUpdateDistance}m")
+                return
+            }
+        }
+
+        AppLogger.d(TAG, "Location received: acc=${location.accuracy}m provider=${location.provider}")
+
+        lastKnownLocation = location
+
+        val zone = geofenceHelper.getPauseZone(location)
+        if (zone != null && insidePauseZone && zone.name == currentZoneName) {
+            AppLogger.d(TAG, "Location dropped: inside active pause zone '$currentZoneName'")
+            // Send position to UI so the map stays current while paused
+            val (bat, batStatus) = deviceInfoHelper.getCachedBatteryStatus()
+            LocationServiceModule.sendLocationEvent(location, bat, batStatus)
+            return
+        }
+        val anchorJob = applyZoneTransition(zone)
+
+        val (battery, batteryStatus) = deviceInfoHelper.getCachedBatteryStatus()
+
+        val timestampSec = location.time / 1000
+
+        serviceScope?.launch {
+            anchorJob?.join()
+            val locationId = dbHelper.saveLocation(
+                latitude = location.latitude,
+                longitude = location.longitude,
+                accuracy = location.accuracy.toDouble(),
+                altitude = if (location.hasAltitude()) location.altitude.toInt() else null,
+                speed = if (location.hasSpeed()) location.speed.toDouble() else null,
+                bearing = if (location.hasBearing()) location.bearing.toDouble() else 0.0,
+                battery = battery,
+                battery_status = batteryStatus,
+                timestamp = timestampSec,
+                endpoint = config.endpoint
+            )
+
+            LocationServiceModule.sendLocationEvent(location, battery, batteryStatus)
+
+            val payload = PayloadBuilder.buildLocationPayload(location, timestampSec, battery, batteryStatus, payloadFieldMap, payloadCustomFields, config.apiFormat)
+
+            syncManager.queueAndSend(locationId, payload)
+
+            withContext(Dispatchers.Main) { updateNotification() }
+        }
+    }
+
+    /**
+     * Starts a delay of 3.5 configured tracking intervals before pausing GPS on geofence entry.
+     * Real GPS locations continue to be logged during the delay, giving backends
+     * like GeoPulse enough arrival points for reliable trip detection.
+     * If the device exits the zone before the delay completes, the delay is cancelled.
+     */
+    private fun startEntryDelay(geofence: GeofenceHelper.Geofence) {
+        if (pendingPauseZone?.name == geofence.name) return
+        entryDelayJob?.cancel()
+        pendingPauseZone = geofence
+
+        val scope = serviceScope ?: run {
+            AppLogger.w(TAG, "Cannot start entry delay for '${geofence.name}' - service scope is null")
+            pendingPauseZone = null
+            return
+        }
+
+        val delayMs = (profileManager.defaultInterval * ENTRY_DELAY_MULTIPLIER).toLong()
+        AppLogger.d(TAG, "Geofence entry delay started for '${geofence.name}': ${delayMs}ms (${delayMs / 1000.0}s)")
+
+        entryDelayJob = scope.launch {
+            delay(delayMs)
+            withContext(Dispatchers.Main) {
+                if (pendingPauseZone?.name == geofence.name) {
+                    pendingPauseZone = null
+                    enterPauseZone(geofence)
+                }
+            }
+        }
+    }
+
+    private fun cancelEntryDelay() {
+        entryDelayJob?.cancel()
+        entryDelayJob = null
+        val zone = pendingPauseZone
+        pendingPauseZone = null
+        AppLogger.d(TAG, "Entry delay cancelled - left zone '${zone?.name}' before delay completed")
+
+        refreshNotificationForCurrentState()
+    }
+
+    private fun enterPauseZone(geofence: GeofenceHelper.Geofence) {
+        insidePauseZone = true
+        currentZoneName = geofence.name
+        currentZoneGeofence = geofence
+        dbHelper.saveSetting(SettingsKeys.PAUSE_ZONE_NAME, geofence.name)
+
+        refreshNotificationForCurrentState()
+        LocationServiceModule.sendPauseZoneEvent(true, geofence.name)
+
+        startZoneHolds(geofence)
+
+        profileManager.clearSpeedBuffer()
+
+        // Flush any queued points so the backend shows the arrival position
+        if (syncManager.isSyncAllowed()) {
+            serviceScope?.launch { syncManager.manualFlush() }
+        }
+
+        AppLogger.d(TAG, "Entered pause zone: ${geofence.name} (heartbeat=${geofence.heartbeatEnabled}, wifi=${geofence.pauseOnWifi}, motionless=${geofence.pauseOnMotionless})")
+    }
+
+
+    private fun exitPauseZone(): Job? {
+        val exitedGeofence = currentZoneGeofence
+        val exitedName = currentZoneName
+        val wasWifiPaused = isWifiPaused
+        val wasMotionlessPaused = isMotionlessPaused
+
+        insidePauseZone = false
+        currentZoneName = null
+        currentZoneGeofence = null
+        dbHelper.saveSetting(SettingsKeys.PAUSE_ZONE_NAME, "")
+
+        stopZoneHolds()
+
+        val anchorJob = exitedGeofence?.let { saveAnchorPoint(it) }
+
+        // Resume GPS if it was stopped by any zone pause hold
+        if (wasWifiPaused || wasMotionlessPaused) setupLocationUpdates()
+
+        refreshNotificationForCurrentState()
+        LocationServiceModule.sendPauseZoneEvent(false, exitedName)
+        AppLogger.d(TAG, "Exited pause zone: $exitedName")
+
+        return anchorJob
+    }
+
+    /**
+     * Starts any pause-zone holds (WiFi, motionless, heartbeat) that the zone has enabled.
+     * Must stay mirrored with [stopZoneHolds] - when adding a new hold, update both.
+     */
+    private fun startZoneHolds(zone: GeofenceHelper.Geofence) {
+        if (zone.pauseOnWifi) registerWifiPause()
+        if (zone.heartbeatEnabled) startHeartbeat(zone.heartbeatIntervalMinutes, firstDelayMs = 0L)
+        ensureMotionDetectorRunning()
+    }
+
+    /**
+     * Stops all pause-zone holds. Safe to call when a hold was never started (each sub-stop is idempotent).
+     * Must stay mirrored with [startZoneHolds].
+     */
+    private fun stopZoneHolds() {
+        unregisterWifiPause()
+        clearMotionlessPauseState()
+        cancelHeartbeat()
+        ensureMotionDetectorRunning()
+    }
+
+    // ── WiFi pause ────────────────────────────────────────────────────────
+
+    /** Stops GPS and updates state when an unmetered network becomes active. */
+    private fun activateWifiPause() {
+        isWifiPaused = true
+        dbHelper.saveSetting(SettingsKeys.PAUSE_ZONE_WIFI_ACTIVE, "true")
+        stopLocationUpdates()
+        refreshNotificationForCurrentState()
+        LocationServiceModule.sendPauseZoneEvent(true, currentZoneName, "wifi")
+        AppLogger.i(TAG, "Unmetered network available - WiFi pause active")
+    }
+
+    /**
+     * Starts monitoring unmetered network availability for a [pauseOnWifi] zone.
+     * Checks current connectivity synchronously on registration since [NetworkCallback.onAvailable]
+     * is posted to the main looper and fires too late to block [setupLocationUpdates].
+     */
+    private fun registerWifiPause() {
+        unregisterWifiPause() // clean up any stale callback
+
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        // Check current connectivity synchronously - onAvailable fires after this call stack.
+        val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+        if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true) {
+            activateWifiPause()
+        }
+
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+            .build()
+
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                wifiResumeJob?.cancel()
+                wifiResumeJob = null
+                unmeteredNetworkCount++
+                if (!isWifiPaused) {
+                    activateWifiPause()
+                }
+            }
+
+            override fun onLost(network: Network) {
+                unmeteredNetworkCount = maxOf(0, unmeteredNetworkCount - 1)
+                if (!isWifiPaused || unmeteredNetworkCount > 0) return
+                AppLogger.i(TAG, "Unmetered network lost - resuming GPS in ${WIFI_RESUME_DEBOUNCE_MS / 1000}s")
+                wifiResumeJob?.cancel()
+                wifiResumeJob = serviceScope?.launch {
+                    delay(WIFI_RESUME_DEBOUNCE_MS)
+                    withContext(Dispatchers.Main) {
+                        if (isWifiPaused && unmeteredNetworkCount == 0) {
+                            isWifiPaused = false
+                            dbHelper.saveSetting(SettingsKeys.PAUSE_ZONE_WIFI_ACTIVE, "false")
+                            maybeResumeGps()
+                            LocationServiceModule.sendPauseZoneEvent(true, currentZoneName, if (isMotionlessPaused) "motionless" else null)
+                            AppLogger.i(TAG, "GPS resumed after unmetered network lost")
+                        }
+                    }
+                }
+            }
+        }
+
+        try {
+            cm.registerNetworkCallback(request, callback, Handler(Looper.getMainLooper()))
+            wifiCallback = callback
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "Failed to register network callback", e)
+        }
+    }
+
+    private fun unregisterWifiPause() {
+        wifiResumeJob?.cancel()
+        wifiResumeJob = null
+        unmeteredNetworkCount = 0
+        isWifiPaused = false
+        dbHelper.saveSetting(SettingsKeys.PAUSE_ZONE_WIFI_ACTIVE, "false")
+        val cb = wifiCallback ?: return
+        wifiCallback = null
+        try {
+            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.unregisterNetworkCallback(cb)
+        } catch (_: Exception) {}
+    }
+
+    // ── Motionless pause ──────────────────────────────────────────────────
+
+    private fun clearMotionlessPauseState() {
+        isMotionlessPaused = false
+        dbHelper.saveSetting(SettingsKeys.PAUSE_ZONE_MOTIONLESS_ACTIVE, "false")
+    }
+
+    /**
+     * Only the motion detector clears a motionless hold, and [ensureMotionDetectorRunning] starts it
+     * only while the zone still pauses on motionless. Restoring the flag without that zone strands it:
+     * [setupLocationUpdates] returns early, so GPS, the heartbeat logger and the pause watchdog never
+     * start, and nothing is left that could release it - not a restart, not force-stopping the app.
+     */
+    private fun restoreMotionlessHold(restoredGeofence: GeofenceHelper.Geofence?, savedActive: Boolean) {
+        if (!savedActive) return
+        if (restoredGeofence?.pauseOnMotionless == true) {
+            isMotionlessPaused = true
+            AppLogger.d(TAG, "Restored motionless pause state")
+        } else {
+            clearMotionlessPauseState()
+            AppLogger.w(TAG, "Dropped stale motionless pause for '$currentZoneName' - zone no longer pauses on motionless")
+        }
+    }
+
+    /**
+     * Starts a heartbeat that records a point at the zone center at a relaxed interval
+     * while paused in a geofence zone.
+     *
+     * [firstDelayMs] is 0 for an arrival, so the backend sees it without waiting an interval.
+     * A restore passes the time still owed on the running interval - see [remainingHeartbeatDelay].
+     * Restarting the clock there would starve a device that respawns the service more often than
+     * the interval, and recording on every restore would stack duplicates for one stay.
+     */
+    private fun startHeartbeat(intervalMinutes: Int, firstDelayMs: Long) {
+        heartbeatArmed = true
+        AppLogger.i(TAG, "Heartbeat started: ${intervalMinutes}min interval, first in ${firstDelayMs}ms")
+        if (firstDelayMs <= 0L) {
+            serviceScope?.launch { recordHeartbeatLocation() }
+            GeofenceHeartbeatScheduler.schedule(this, intervalMinutes * 60_000L)
+        } else {
+            GeofenceHeartbeatScheduler.schedule(this, firstDelayMs)
+        }
+    }
+
+    /**
+     * Time left on the interval that was running before this service instance existed.
+     * No stored timestamp means record now and establish one, which self-corrects on the
+     * next restart rather than leaving the heartbeat permanently silent.
+     */
+    private fun remainingHeartbeatDelay(intervalMinutes: Int): Long {
+        val lastAt = dbHelper.getSetting(SettingsKeys.HEARTBEAT_LAST_AT)?.toLongOrNull() ?: return 0L
+        val elapsed = System.currentTimeMillis() - lastAt
+        return (intervalMinutes * 60_000L - elapsed).coerceIn(0L, intervalMinutes * 60_000L)
+    }
+
+    private fun cancelHeartbeat() {
+        // Unconditional: a fresh instance reads as unarmed, but the old process's alarm still fires
+        val wasArmed = heartbeatArmed
+        heartbeatArmed = false
+        GeofenceHeartbeatScheduler.cancel(this)
+        if (wasArmed) AppLogger.i(TAG, "Heartbeat cancelled")
+    }
+
+    /** The stored timestamp decides whether to record, since a restore may already have done it. */
+    private fun handleGeofenceHeartbeatFired(shouldBeTracking: Boolean) {
+        val zone = currentZoneGeofence
+        if (!insidePauseZone || zone?.heartbeatEnabled != true) {
+            cancelHeartbeat()
+            // A zone-to-zone move leaves the old alarm pending, so this reaches healthy services
+            // too. A pause hold also has no stream, so only intent may stop one.
+            if (!shouldBeTracking) stopSelf()
+            else if (!isLocationUpdatesRegistered()) maybeResumeGps()
+            return
+        }
+        heartbeatArmed = true
+
+        val remaining = remainingHeartbeatDelay(zone.heartbeatIntervalMinutes)
+        if (remaining > 0L) {
+            GeofenceHeartbeatScheduler.schedule(this, remaining)
+            return
+        }
+
+        // The alarm's wake window ends when onReceive returns, and a foreground service does not
+        // hold the CPU, so the DB write and send need their own wakelock.
+        val wakeLock = acquireHeartbeatWakeLock()
+        val scope = serviceScope
+        if (scope == null) {
+            if (wakeLock?.isHeld == true) wakeLock.release()
+            return
+        }
+        scope.launch {
+            try {
+                recordHeartbeatLocation()
+            } finally {
+                if (wakeLock?.isHeld == true) wakeLock.release()
+            }
+        }
+        GeofenceHeartbeatScheduler.schedule(this, zone.heartbeatIntervalMinutes * 60_000L)
+
+        // A lightweight action builds no stream, and zone exit is only seen on one. Last, because
+        // the recheck it triggers can exit the zone synchronously and cancel the alarm just armed.
+        if (!isLocationUpdatesRegistered()) maybeResumeGps()
+    }
+
+    /**
+     * Records a point at the current zone center. Mirrors [saveAnchorPoint]: the point is
+     * saved unconditionally and handed to [SyncManager], which owns whether it goes out now,
+     * waits in the queue or stays local in offline mode. Recording and sending are separate
+     * concerns here - gating the save on a successful send loses the stay entirely whenever
+     * the server is unreachable or sync is not allowed. The send skips the sync interval: on
+     * Power Saver a queued stay reaches the endpoint 15 minutes after the user got home.
+     * While a sync pass runs, the point waits in the queue for that pass or the next.
+     */
+    private suspend fun recordHeartbeatLocation() {
+        if (!::config.isInitialized) {
+            AppLogger.w(TAG, "Config not yet initialized, skipping heartbeat")
+            return
+        }
+
+        val zone = currentZoneGeofence
+        if (zone == null) {
+            AppLogger.d(TAG, "Heartbeat skipped: no current zone")
+            return
+        }
+
+        val location = Location("geofence").apply {
+            latitude = zone.lat
+            longitude = zone.lon
+            accuracy = 0f
+            time = System.currentTimeMillis()
+        }
+        val (battery, batteryStatus) = deviceInfoHelper.getCachedBatteryStatus()
+        val timestampSec = location.time / 1000
+
+        val locationId = dbHelper.saveLocation(
+            latitude = location.latitude,
+            longitude = location.longitude,
+            accuracy = location.accuracy.toDouble(),
+            altitude = if (location.hasAltitude()) location.altitude.toInt() else null,
+            speed = 0.0,
+            bearing = 0.0,
+            battery = battery,
+            battery_status = batteryStatus,
+            timestamp = timestampSec,
+            endpoint = config.endpoint
+        )
+
+        // Emit before queueAndSend: an instant-mode send blocks on the network, and the map
+        // should not wait out a timeout to show a point that is already saved.
+        LocationServiceModule.sendLocationEvent(location, battery, batteryStatus)
+
+        dbHelper.saveSetting(SettingsKeys.HEARTBEAT_LAST_AT, location.time.toString())
+
+        val payload = PayloadBuilder.buildLocationPayload(location, timestampSec, battery, batteryStatus, payloadFieldMap, payloadCustomFields, config.apiFormat)
+        syncManager.queueAndSend(locationId, payload, bypassInterval = true)
+
+        AppLogger.i(TAG, "Heartbeat recorded for zone '${zone.name}'")
+    }
+
+    /**
+     * Resumes GPS only if no pause holds are active.
+     * Use this instead of calling [setupLocationUpdates] directly in WiFi/motionless resume paths.
+     */
+    private fun maybeResumeGps() {
+        val geofence = currentZoneGeofence ?: run { setupLocationUpdates(); refreshNotificationForCurrentState(); return }
+        val wifiHold = geofence.pauseOnWifi && isWifiPaused
+        val motionHold = geofence.pauseOnMotionless && isMotionlessPaused
+        if (!wifiHold && !motionHold) {
+            AppLogger.i(TAG, "GPS resumed - all pause holds cleared")
+            setupLocationUpdates()
+            refreshNotificationForCurrentState()
+        } else {
+            AppLogger.i(TAG, "GPS still held: wifi=$wifiHold motionless=$motionHold")
+        }
+    }
+
+    /** Logs a synthetic location at the geofence center on zone exit to give the departing trip a clean start point. */
+    private fun saveAnchorPoint(geofence: GeofenceHelper.Geofence): Job? {
+        if (!::config.isInitialized) {
+            AppLogger.w(TAG, "Config not yet initialized, skipping anchor point for '${geofence.name}'")
+            return null
+        }
+
+        val lastFix = lastKnownLocation
+        val anchorTimeMs = if (lastFix != null) lastFix.time - 1000 else System.currentTimeMillis()
+        val anchorTimeSec = anchorTimeMs / 1000
+
+        val (battery, batteryStatus) = deviceInfoHelper.getCachedBatteryStatus()
+
+        val syntheticLocation = Location("geofence").apply {
+            latitude = geofence.lat
+            longitude = geofence.lon
+            accuracy = 0f
+            time = anchorTimeMs
+        }
+
+        return serviceScope?.launch {
+            val locationId = dbHelper.saveLocation(
+                latitude = geofence.lat,
+                longitude = geofence.lon,
+                accuracy = 0.0,
+                altitude = null,
+                speed = null,
+                bearing = null,
+                battery = battery,
+                battery_status = batteryStatus,
+                timestamp = anchorTimeSec,
+                endpoint = config.endpoint
+            )
+
+            val payload = PayloadBuilder.buildLocationPayload(syntheticLocation, anchorTimeSec, battery, batteryStatus, payloadFieldMap, payloadCustomFields, config.apiFormat)
+
+            syncManager.queueAndSend(locationId, payload)
+
+            AppLogger.d(TAG, "Anchor point saved at geofence '${geofence.name}' center")
+        }
+    }
+
+    /** Call once the pause-state fields and settings are written, or it posts the old state. */
+    private fun refreshNotificationForCurrentState() {
+        updateNotification(forceUpdate = true)
+    }
+
+    private fun updateNotification(forceUpdate: Boolean = false) {
+        notificationHelper.update(statusInput(), forceUpdate)
+    }
+
+    private fun statusInput(): NotificationHelper.StatusInput {
+        val offline = ::config.isInitialized && config.isOfflineMode
+        return NotificationHelper.StatusInput(
+            locationEnabled = deviceInfoHelper.isLocationEnabled(),
+            isPaused = insidePauseZone,
+            isWifiPaused = isWifiPaused,
+            isMotionlessPaused = isMotionlessPaused,
+            isStationary = ::profileManager.isInitialized && profileManager.isStationary,
+            hasFix = lastKnownLocation != null,
+            lastFixMs = lastFixEpochMs.takeIf { it > 0L } ?: startedAtMs,
+            isOfflineMode = offline,
+            queuedCount = if (offline) 0 else syncManager.getCachedQueuedCount(),
+            lastSyncTime = if (offline) 0L else syncManager.lastSuccessfulSyncTime
+        )
+    }
+
+    /** Fired by [batteryMonitor] on a critical-battery broadcast. */
+    private fun onBatteryCritical() {
+        AppLogger.i(TAG, "Battery critical and unplugged - stopping (battery monitor)")
+        stopForegroundServiceWithReason(NotificationHelper.StopReason.BATTERY, stoppedByBattery = true)
+    }
+
+    private fun stopForegroundServiceWithReason(
+        reason: NotificationHelper.StopReason,
+        stoppedByBattery: Boolean = false,
+        unexpected: Boolean = true
+    ) {
+        if (isStopping) return
+        isStopping = true
+        AppLogger.i(TAG, "Stopping: ${reason.name}")
+
+        // Reset profile indicator in JS UI
+        if (profileManager.getActiveProfileName() != null) {
+            LocationServiceModule.sendProfileSwitchEvent(null, null)
+        }
+
+        LocationServiceModule.sendTrackingStoppedEvent(reason.name)
+        dbHelper.saveSetting(SettingsKeys.TRACKING_ENABLED, "false")
+        dbHelper.saveSetting(SettingsKeys.STOPPED_BY_BATTERY, if (stoppedByBattery) "true" else "false")
+        if (stoppedByBattery) BatteryRecoveryScheduler.schedule(this)
+        TrackingWatchdogScheduler.cancel(this)
+        dbHelper.saveSetting(SettingsKeys.PAUSE_ZONE_NAME, "")
+        dbHelper.saveSetting(SettingsKeys.PAUSE_ZONE_WIFI_ACTIVE, "false")
+        dbHelper.saveSetting(SettingsKeys.PAUSE_ZONE_MOTIONLESS_ACTIVE, "false")
+
+        stopForeground(Service.STOP_FOREGROUND_DETACH)
+
+        notificationManager.notify(
+            NotificationHelper.STOPPED_NOTIFICATION_ID,
+            notificationHelper.buildStoppedNotification(reason, unexpected = unexpected)
+        )
+
+        stopLocationUpdates()
+        stopSelf()
+    }
+
+    /**
+     * STATIONARY: pause GPS if inside a `pauseOnMotionless` zone.
+     * MOVING: clear motionless pause and notify the profile manager.
+     */
+    private fun onMotionStateChange(state: MotionState) {
+        when (state) {
+            MotionState.STATIONARY -> {
+                if (insidePauseZone && currentZoneGeofence?.pauseOnMotionless == true && !isMotionlessPaused) {
+                    isMotionlessPaused = true
+                    dbHelper.saveSetting(SettingsKeys.PAUSE_ZONE_MOTIONLESS_ACTIVE, "true")
+                    stopLocationUpdates()
+                    refreshNotificationForCurrentState()
+                    LocationServiceModule.sendPauseZoneEvent(true, currentZoneName, "motionless")
+                    AppLogger.i(TAG, "Motion detector reports STATIONARY in pause zone - GPS paused")
+                }
+            }
+            MotionState.MOVING -> {
+                if (isMotionlessPaused) {
+                    clearMotionlessPauseState()
+                    maybeResumeGps()
+                    LocationServiceModule.sendPauseZoneEvent(true, currentZoneName, if (isWifiPaused) "wifi" else null)
+                    AppLogger.i(TAG, "Motion detector reports MOVING in pause zone - motionless hold cleared")
+                }
+                profileManager.onMotionDetected()
+                ensureMotionDetectorRunning()
+            }
+        }
+    }
+
+    /** Runs the detector when motionless pause is enabled inside the current zone or the profile is stationary. */
+    private fun ensureMotionDetectorRunning() {
+        val detector = motionDetector ?: return
+        val needForZone = insidePauseZone && currentZoneGeofence?.pauseOnMotionless == true
+        val needForProfile = profileManager.isStationary
+        if (needForZone || needForProfile) {
+            detector.start(::onMotionStateChange)
+        } else {
+            detector.stop()
+        }
+    }
+
+    private fun handleStationaryChanged(stationary: Boolean) {
+        ensureMotionDetectorRunning()
+        // Reset the edge-triggered detector so continuing motion re-fires a MOVING edge.
+        if (stationary) (motionDetector as? RawSensorMotionDetector)?.resyncStationaryBaseline()
+    }
+
+    // ── Debug-only motion injection (BuildConfig.DEBUG) ───────────────────
+
+    private val debugMotionReceiver = if (BuildConfig.DEBUG) object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != ACTION_DEBUG_FORCE_MOTION) return
+            val raw = intent.getStringExtra("state") ?: run {
+                AppLogger.w(TAG, "DEBUG_FORCE_MOTION: missing 'state' extra")
+                return
+            }
+            val state = try {
+                MotionState.valueOf(raw)
+            } catch (_: IllegalArgumentException) {
+                AppLogger.w(TAG, "DEBUG_FORCE_MOTION: invalid state '$raw' (expected STATIONARY|MOVING)")
+                return
+            }
+            (motionDetector as? RawSensorMotionDetector)?.forceState(state)
+            AppLogger.d(TAG, "DEBUG_FORCE_MOTION -> $state")
+        }
+    } else null
+
+    private fun registerDebugMotionReceiver() {
+        val receiver = debugMotionReceiver ?: return
+        ContextCompat.registerReceiver(
+            this, receiver, IntentFilter(ACTION_DEBUG_FORCE_MOTION), ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
+    private fun unregisterDebugMotionReceiver() {
+        val receiver = debugMotionReceiver ?: return
+        try { unregisterReceiver(receiver) } catch (_: IllegalArgumentException) {}
+    }
+
+    // ── Profile hot-swap ────────────────────────────────────────────────
+
+    /** Hot-swaps GPS interval and sync config on profile change. */
+    private fun applyProfileConfig(interval: Long, distance: Float, syncInterval: Int, conditionType: String) {
+        val isStationary = conditionType == ProfileConstants.CONDITION_STATIONARY
+        config = config.copy(
+            interval = interval,
+            // A distance filter would drop every stationary point (each ~0m from the last), defeating the heartbeat.
+            minUpdateDistance = if (isStationary) 0f else distance,
+            syncIntervalSeconds = syncInterval
+        )
+
+        pushConfigToSyncManager()
+
+        // Synchronous restart on Main thread to avoid duplicate locations from
+        // the old listener firing during an async coroutine window.
+        locationRestartJob?.cancel()
+        locationRestartJob = null
+        stopLocationUpdates()
+        setupLocationUpdates()
+
+        // A stationary device gets no OS-pushed fixes, so drive it with an active heartbeat instead.
+        if (isStationary) scheduleStationaryHeartbeat() else cancelStationaryHeartbeat()
+
+        refreshNotificationForCurrentState()
+
+        AppLogger.i(TAG, "Profile config applied: ${profileManager.getActiveProfileName() ?: "default"} - interval=${interval}ms, distance=${distance}m, sync=${syncInterval}s")
+    }
+
+    private fun scheduleStationaryHeartbeat() {
+        stationaryHeartbeatArmed = true
+        StationaryHeartbeatScheduler.schedule(this, config.interval)
+    }
+
+    private fun cancelStationaryHeartbeat() {
+        if (!stationaryHeartbeatArmed) return
+        stationaryHeartbeatArmed = false
+        StationaryHeartbeatScheduler.cancel(this)
+    }
+
+    private fun handleStationaryHeartbeatFired() {
+        if (!stationaryHeartbeatArmed) return
+        // A pause hold (WiFi / motionless / zone) owns its own recording - don't double-log over it.
+        if (!isWifiPaused && !isMotionlessPaused && !insidePauseZone) {
+            // Wakelock holds the CPU across the async fix - the alarm's wake window ends here, and a foreground service won't.
+            val wakeLock = acquireHeartbeatWakeLock()
+            requestFreshOrLastLocation { location, _ ->
+                if (location != null) {
+                    // Bypasses the provider callback, so stamp here or a stationary profile, which
+                    // gets no OS-pushed fixes by design, reads as a dead stream.
+                    lastFixAtMs = SystemClock.elapsedRealtime()
+                    lastFixAtUptimeMs = SystemClock.uptimeMillis()
+                    handleLocationUpdate(location)
+                } else AppLogger.d(TAG, "Stationary heartbeat: no usable fix")
+                if (wakeLock?.isHeld == true) wakeLock.release()
+            }
+        }
+        scheduleStationaryHeartbeat()
+    }
+
+    private fun acquireHeartbeatWakeLock(): PowerManager.WakeLock? {
+        val pm = getSystemService(POWER_SERVICE) as? PowerManager ?: return null
+        return pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "colota:heartbeat").apply {
+            acquire(HEARTBEAT_WAKELOCK_TIMEOUT_MS)
+        }
+    }
+
+    private fun pushConfigToSyncManager() {
+        // Only wifi_ssid reads the SSID, and reading it is attributed as location access.
+        networkMonitor.setSsidTracking(config.syncCondition == "wifi_ssid")
+
+        // Instant mode bypasses the queue and posts one flat payload, which 4xxs
+        // forever against /api/v1/overland/batches. Defensive net under the UI guard.
+        val effectiveFormat = if (config.syncIntervalSeconds == 0 && config.apiFormat == ApiFormat.OVERLAND_BATCH) {
+            AppLogger.w(TAG, "Batch mode incompatible with instant sync (interval=0); downgrading to single-point")
+            ApiFormat.FIELD_MAPPED
+        } else {
+            config.apiFormat
+        }
+
+        syncManager.updateConfig(
+            endpoint = config.endpoint,
+            syncIntervalSeconds = config.syncIntervalSeconds,
+            retryIntervalSeconds = config.retryIntervalSeconds,
+            isOfflineMode = config.isOfflineMode,
+            syncCondition = config.syncCondition,
+            syncSsid = config.syncSsid,
+            authHeaders = secureStorage.getAuthHeaders(),
+            httpMethod = config.httpMethod,
+            apiFormat = effectiveFormat,
+            overlandBatchSize = config.overlandBatchSize
+        )
+    }
+
+    private fun loadConfigFromIntent(intent: Intent?) {
+        config = if (intent != null) {
+            ServiceConfig.fromIntent(intent, dbHelper)
+        } else {
+            ServiceConfig.fromDatabase(dbHelper)
+        }
+
+        pushConfigToSyncManager()
+
+        // Defaults for ProfileManager to revert to when no profile matches
+        profileManager.defaultInterval = config.interval
+        profileManager.defaultDistance = config.minUpdateDistance
+        profileManager.defaultSyncInterval = config.syncIntervalSeconds
+        profileManager.defaultAccuracyMode = config.accuracyMode
+
+        val parsedFieldMap = PayloadBuilder.parseFieldMap(config.fieldMap) ?: emptyMap()
+        val parsedCustomFields = PayloadBuilder.parseCustomFields(config.customFields) ?: emptyMap()
+        payloadFieldMap = parsedFieldMap
+        payloadCustomFields = parsedCustomFields
+
+        AppLogger.d(TAG, buildString {
+            append("Config loaded: interval=${config.interval}ms, distance=${config.minUpdateDistance}m, accuracy=${config.accuracyThreshold}m, accuracyMode=${config.accuracyMode.wireName}")
+            append(", endpoint=${if (config.endpoint.isBlank()) "NOT CONFIGURED" else AppLogger.maskSensitiveUrlValues(config.endpoint)}")
+            append(", offline=${config.isOfflineMode}, sync=${if (config.syncIntervalSeconds == 0) "instant" else "${config.syncIntervalSeconds}s"}")
+            if (parsedFieldMap.isNotEmpty()) append(", fieldMap=${parsedFieldMap.size} mappings")
+        })
+    }
+}

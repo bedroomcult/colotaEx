@@ -39,7 +39,7 @@ export function AboutScreen({}: ScreenProps) {
           <View style={styles.appIconContainer}>
             <Image source={icon} style={styles.appIcon} resizeMode="contain" />
           </View>
-          <Text style={[styles.name, { color: colors.text }]}>Colota</Text>
+          <Text style={[styles.name, { color: colors.text }]}>ColotaEx</Text>
           <Text style={[styles.version, { color: colors.textSecondary }]} testID="about-version">
             Version {buildLine(build)}
           </Text>
@@ -52,7 +52,7 @@ export function AboutScreen({}: ScreenProps) {
               testID="nav-privacy-policy"
               icon={FileText}
               label={t("about.privacy")}
-              sub="colota.app/privacy-policy"
+              sub="github.com/bedroomcult/colotaEx"
               trailingIcon={ExternalLink}
               accessibilityRole="link"
               onPress={() => openURL(PRIVACY_POLICY_URL)}
@@ -72,7 +72,7 @@ export function AboutScreen({}: ScreenProps) {
               testID="nav-source-code"
               icon={Code}
               label={t("about.source")}
-              sub="github.com/dietrichmax/colota"
+              sub="github.com/bedroomcult/colotaEx"
               trailingIcon={ExternalLink}
               accessibilityRole="link"
               onPress={() => openURL(REPO_URL)}

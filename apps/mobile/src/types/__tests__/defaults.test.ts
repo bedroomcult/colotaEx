@@ -158,7 +158,7 @@ describe("API_TEMPLATES", () => {
 
     expect(described).toEqual({
       dawarich: "OwnTracks-compatible format for Dawarich",
-      geopulse: "Native Colota format for GeoPulse",
+      geopulse: "Native ColotaEx format for GeoPulse",
       overland: "Overland-compatible batch endpoint (GeoJSON Features)",
       owntracks: "Standard OwnTracks HTTP format",
       phonetrack: "Nextcloud PhoneTrack logging format",

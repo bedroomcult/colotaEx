@@ -122,7 +122,7 @@ describe("backupScopeLine and backupExcludesLine", () => {
 describe("archiveLine and restoreConfirm", () => {
   it("names the date the archive was made and the count it would replace", () => {
     expect(archiveLine(manifest()).label).toBe(`Backup from ${formatDateWithYear(MADE_SECONDS)}`)
-    expect(archiveLine(manifest()).caption).toBe("Colota 1.16.0 · opened with your password")
+    expect(archiveLine(manifest()).caption).toBe("ColotaEx 1.16.0 · opened with your password")
 
     const copy = restoreConfirm(12481, manifest())
     expect(copy.title).toBe("Replace all 12,481 locations?")
