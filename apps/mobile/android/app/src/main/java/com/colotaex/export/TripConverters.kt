@@ -100,7 +100,7 @@ object TripConverters {
     private fun tripsToGpx(trips: List<TripExport>): String {
         val sb = StringBuilder()
         sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-        sb.append("<gpx version=\"1.1\" creator=\"Colota\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n")
+        sb.append("<gpx version=\"1.1\" creator=\"ColotaEx\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n")
         sb.append("  <metadata>\n")
         sb.append("    <name>ColotaEx Trip Export</name>\n")
         sb.append("    <time>${isoTime(System.currentTimeMillis() / 1000)}</time>\n")
