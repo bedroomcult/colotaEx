@@ -360,12 +360,13 @@ describe("TripDetailScreen - max speed and the speed ramp", () => {
   }
 
   it("prints the peak speed straight after the average, in the same unit", async () => {
-    const { getAllByRole } = render(<TripDetailScreen {...makeProps(withSpeeds([2, 4, 12]))} />)
+    const { getAllByLabelText } = render(<TripDetailScreen {...makeProps(withSpeeds([2, 4, 12]))} />)
     await act(async () => {})
 
-    const labels = getAllByRole("text").map((row) => String(row.props.accessibilityLabel))
-    const avg = labels.findIndex((label) => label.startsWith("Avg speed, "))
-    expect(labels[avg + 1]).toMatch(/^Max speed, 43[.,]2 km\/h$/)
+    const labels = getAllByLabelText(/^(Avg|Max) speed, /).map((row) => String(row.props.accessibilityLabel))
+    expect(labels).toHaveLength(2)
+    expect(labels[0]).toMatch(/^Avg speed, /)
+    expect(labels[1]).toMatch(/^Max speed, 43[.,]2 km\/h$/)
   })
 
   it("names both ends of the ramp the map draws, so the reds are readable", async () => {
