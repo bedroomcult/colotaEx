@@ -87,9 +87,8 @@ describe("AboutScreen", () => {
     fireEvent.press(api.getByTestId("nav-source-code"))
     expect(Linking.openURL).toHaveBeenLastCalledWith("https://github.com/bedroomcult/colotaEx")
 
-    expect(api.getByText("github.com/bedroomcult/colotaEx", { exact: false })).toBeTruthy()
+    expect(api.getAllByText("github.com/bedroomcult/colotaEx")).toHaveLength(2)
     expect(api.getByText("GNU AGPLv3")).toBeTruthy()
-    expect(api.getByText("github.com/bedroomcult/colotaEx")).toBeTruthy()
     expect(await api.findAllByRole("link")).toHaveLength(3)
     expect(api.queryAllByRole("button")).toHaveLength(0)
   })

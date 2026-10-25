@@ -196,7 +196,7 @@ describe("ColotaMapView attribution popup", () => {
     expect(getByText("Map data")).toBeTruthy()
     expect(getByText("Tile schema and base styles")).toBeTruthy()
     expect(getByText("Planet tiles, rebuilt weekly")).toBeTruthy()
-    expect(getByText("Tile hosting and the Colota styles")).toBeTruthy()
+    expect(getByText("Tile hosting and the ColotaEx styles")).toBeTruthy()
     expect(getByRole("button", { name: "Close" })).toBeTruthy()
     expect(queryByLabelText("Close")).toBeNull()
   })
@@ -223,7 +223,7 @@ describe("attributionRole", () => {
     expect(attributionRole("https://www.openstreetmap.org/copyright")).toBe("Map data")
     expect(attributionRole("https://tile.openstreetmap.org/tiles")).toBe("Map data")
     expect(attributionRole("https://openmaptiles.org/")).toBe("Tile schema and base styles")
-    expect(attributionRole("https://maps.mxd.codes")).toBe("Tile hosting and the Colota styles")
+    expect(attributionRole("https://maps.mxd.codes")).toBe("Tile hosting and the ColotaEx styles")
   })
 
   it("credits a custom tile server's own sources without claiming a role for them", () => {

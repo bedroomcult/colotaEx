@@ -166,7 +166,7 @@ describe("setupLink", () => {
 
   it("builds a colotaex://setup link the importer can decode", () => {
     const link = buildSetupLink(parts, ALL)
-    expect(link).toMatch(/^colota:\/\/setup\?config=/)
+    expect(link).toMatch(/^colotaex:\/\/setup\?config=/)
     expect(validateConfig(decodeConfig(link.split("config=")[1])).valid).toBe(true)
   })
 
