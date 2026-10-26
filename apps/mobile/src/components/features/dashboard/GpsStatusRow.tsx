@@ -9,6 +9,8 @@ import type { LocationCoords } from "../../../types/global"
 import { metersToInput, shortDistanceUnit } from "../../../utils/geo"
 import { useTheme } from "../../../hooks/useTheme"
 import { useTranslation } from "../../../i18n/useTranslation"
+import NativeLocationService from "../../../services/NativeLocationService"
+import { logger } from "../../../utils/logger"
 import { StateLine } from "../../ui/StateLine"
 
 /** Live fix older than this multiple of the tracking interval reads as stale. */
@@ -51,18 +53,55 @@ export function GpsStatusRow({ tracking, coords, lastKnown, intervalSeconds }: P
     const id = setInterval(() => setNowMs(Date.now()), 5000)
     return () => clearInterval(id)
   }, [])
+  // Live fix carries its own snapshot; this covers idle and searching, where no
+  // location events flow. Polls while the dashboard is open; native times out
+  // in 8 s when there is no sky view.
+  const [idleSats, setIdleSats] = useState<{
+    used: number
+    total: number
+  } | null>(null)
+  const needsIdleSats =
+    coords?.satellitesUsed == null && (!tracking || coords == null || coords.latitude === 0)
+  useEffect(() => {
+    if (!needsIdleSats) return
+    let cancelled = false
+    const poll = () => {
+      // ensureModule throws outside safeExecute when the bridge is missing (tests).
+      let result: Promise<{ satellitesUsed: number; satellitesInView: number } | null>
+      try {
+        result = NativeLocationService.getGnssStatus()
+      } catch {
+        return
+      }
+      result
+        .then((sats) => {
+          if (!cancelled && sats) setIdleSats({ used: sats.satellitesUsed, total: sats.satellitesInView })
+        })
+        .catch((err) => logger.debug("[GpsStatusRow] GNSS snapshot unavailable:", err))
+    }
+    poll()
+    const id = setInterval(poll, 15000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [needsIdleSats])
 
   const hasFix = tracking && coords !== null && coords.latitude !== 0 && coords.longitude !== 0
+
+  const liveSats =
+    coords?.satellitesUsed != null
+      ? { used: coords.satellitesUsed, total: coords.satellitesInView ?? null }
+      : idleSats
+  const satsText = liveSats
+    ? t("gps.sats", { used: liveSats.used, total: liveSats.total ?? "–" })
+    : t("gps.satsUnknown")
 
   if (hasFix && coords) {
     const accuracy = Math.round(metersToInput(coords.accuracy ?? 0))
     const age = ageSeconds(coords.timestamp, nowMs)
     const stale = age != null && intervalSeconds > 0 && age > STALE_MULTIPLE * intervalSeconds
-    const sats =
-      coords.satellitesUsed != null
-        ? t("gps.sats", { used: coords.satellitesUsed, total: coords.satellitesInView ?? "–" })
-        : t("gps.satsUnknown")
-    const caption = [sats, formatAge(age, t)].filter(Boolean).join(" · ")
+    const caption = [satsText, formatAge(age, t)].filter(Boolean).join(" · ")
     const tone =
       stale || accuracy > FAIR_M ? colors.error : accuracy > GOOD_M ? colors.warning : colors.success
     return (
@@ -78,13 +117,15 @@ export function GpsStatusRow({ tracking, coords, lastKnown, intervalSeconds }: P
 
   if (tracking) {
     const age = ageSeconds(lastKnown?.timestamp, nowMs)
-    const agePart = age != null ? ` · ${formatAge(age, t)}` : ""
+    const caption = [t("state.noFixYet"), satsText, age != null ? formatAge(age, t) : null]
+      .filter(Boolean)
+      .join(" · ")
     return (
       <StateLine
         icon={Satellite}
         iconColor={colors.textSecondary}
         label={t("gps.searching")}
-        caption={`${t("state.noFixYet")}${agePart}`}
+        caption={caption}
         testID="gps-status"
       />
     )
@@ -92,7 +133,9 @@ export function GpsStatusRow({ tracking, coords, lastKnown, intervalSeconds }: P
 
   if (lastKnown) {
     const accuracy = Math.round(metersToInput(lastKnown.accuracy ?? 0))
-    const caption = formatAge(ageSeconds(lastKnown.timestamp, nowMs), t) ?? ""
+    const caption = [satsText, formatAge(ageSeconds(lastKnown.timestamp, nowMs), t)]
+      .filter(Boolean)
+      .join(" · ")
     return (
       <StateLine
         icon={Satellite}

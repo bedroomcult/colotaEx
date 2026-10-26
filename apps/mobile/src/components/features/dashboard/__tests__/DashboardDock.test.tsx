@@ -16,7 +16,8 @@ const mockGetSetting = jest.fn()
 jest.mock("../../../../services/NativeLocationService", () => ({
   __esModule: true,
   default: {
-    getSetting: (...args: string[]) => mockGetSetting(...args)
+    getSetting: (...args: string[]) => mockGetSetting(...args),
+    getGnssStatus: jest.fn().mockResolvedValue(null)
   }
 }))
 

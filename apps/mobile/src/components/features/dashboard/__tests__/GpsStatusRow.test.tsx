@@ -4,7 +4,7 @@
  */
 
 import React from "react"
-import { render } from "@testing-library/react-native"
+import { render, act, waitFor } from "@testing-library/react-native"
 import { loadDisplayPreferences } from "../../../../utils/geo"
 
 jest.mock("../../../../hooks/useTheme", () => ({
@@ -13,18 +13,20 @@ jest.mock("../../../../hooks/useTheme", () => ({
 
 import { GpsStatusRow } from "../GpsStatusRow"
 
-jest.useFakeTimers()
+const mockGetGnssStatus = jest.fn()
 
 beforeAll(async () => {
   const NativeLocationService = require("../../../../services/NativeLocationService").default
   NativeLocationService.getSetting = jest.fn((key: string) =>
     Promise.resolve(key === "unitSystem" ? "metric" : "")
   )
+  NativeLocationService.getGnssStatus = mockGetGnssStatus
   await loadDisplayPreferences()
 })
 
-afterAll(() => {
-  jest.useRealTimers()
+beforeEach(() => {
+  mockGetGnssStatus.mockReset()
+  mockGetGnssStatus.mockResolvedValue(null)
 })
 
 const live = {
@@ -90,9 +92,10 @@ describe("GpsStatusRow", () => {
       lastKnown: { accuracy: 30, timestamp: Math.floor(Date.now() / 1000) - 65 }
     })
 
-    // The dock state line names the same missing fix, so this row reads like its echo.
+    // The dock state line names the same missing fix, so this row reads like its echo;
+    // sats poll separately and join the caption when the chipset answers.
     expect(getByTestId("gps-status").props.accessibilityLabel).toMatch(
-      /^Searching for GPS signal, No fix yet · 1 min ago$/
+      /^Searching for GPS signal, No fix yet · sats – · 1 min ago$/
     )
   })
 
@@ -111,5 +114,33 @@ describe("GpsStatusRow", () => {
     const { getByTestId } = renderRow({ tracking: false, lastKnown: null })
 
     expect(getByTestId("gps-status").props.accessibilityLabel).toBe("No GPS fix, No fixes yet")
+  })
+
+  it("joins the idle snapshot into the caption once the chipset answers", async () => {
+    mockGetGnssStatus.mockResolvedValue({ satellitesUsed: 5, satellitesInView: 11 })
+    const { getByTestId } = renderRow({
+      tracking: false,
+      lastKnown: { accuracy: 18, timestamp: Math.floor(Date.now() / 1000) - 30 }
+    })
+
+    await waitFor(() =>
+      expect(getByTestId("gps-status").props.accessibilityLabel).toMatch(
+        /^±18 m last fix, 5\/11 sats · \d+s ago$/
+      )
+    )
+  })
+
+  it("leaves the idle caption alone when the snapshot rejects", async () => {
+    mockGetGnssStatus.mockRejectedValue(new Error("no sky view"))
+    const { getByTestId } = renderRow({
+      tracking: false,
+      lastKnown: { accuracy: 18, timestamp: Math.floor(Date.now() / 1000) - 30 }
+    })
+
+    await act(async () => {})
+    expect(getByTestId("gps-status").props.accessibilityLabel).toMatch(
+      /^±18 m last fix, sats – · \d+s ago$/
+    )
+    expect(mockGetGnssStatus).toHaveBeenCalled()
   })
 })

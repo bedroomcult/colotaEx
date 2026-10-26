@@ -12,6 +12,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.location.GnssStatus
+import android.location.LocationManager
 import androidx.core.content.ContextCompat
 import com.colotaex.BuildConfig
 import com.colotaex.data.DatabaseHelper
@@ -922,6 +924,60 @@ class LocationServiceModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun isServiceRunning(promise: Promise) {
         promise.resolve(LocationForegroundService.isStarted)
+    }
+
+    /**
+     * One-shot GNSS satellite snapshot for the dashboard's GPS row when the tracking
+     * stream is not running. Registers, waits for the first callback, unregisters.
+     * Rejects (never resolves null) when GNSS is unavailable so the caller can
+     * distinguish "no satellites" from "no permission / no GNSS hardware".
+     */
+    @ReactMethod
+    fun getGnssStatus(promise: Promise) {
+        try {
+            val manager = reactApplicationContext.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            if (manager == null) {
+                promise.reject("GNSS_UNAVAILABLE", "No LocationManager")
+                return
+            }
+            val settled = java.util.concurrent.atomic.AtomicBoolean(false)
+            val callback = object : GnssStatus.Callback() {
+                override fun onSatelliteStatusChanged(status: GnssStatus) {
+                    if (!settled.compareAndSet(false, true)) return
+                    try {
+                        manager.unregisterGnssStatusCallback(this)
+                    } catch (_: Exception) {
+                    }
+                    var used = 0
+                    for (i in 0 until status.satelliteCount) {
+                        if (status.usedInFix(i)) used++
+                    }
+                    promise.resolve(Arguments.createMap().apply {
+                        putInt("satellitesUsed", used)
+                        putInt("satellitesInView", status.satelliteCount)
+                        putDouble("timestamp", System.currentTimeMillis().toDouble())
+                    })
+                }
+            }
+            if (!manager.registerGnssStatusCallback(reactApplicationContext.mainExecutor, callback)) {
+                promise.reject("GNSS_UNAVAILABLE", "Registration returned false")
+                return
+            }
+            // No callback ever arrives without GNSS hardware or sky view; time out
+            // rather than leaking the callback and leaving the promise hanging.
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (!settled.compareAndSet(false, true)) return@postDelayed
+                try {
+                    manager.unregisterGnssStatusCallback(callback)
+                } catch (_: Exception) {
+                }
+                promise.reject("GNSS_TIMEOUT", "No satellite status within timeout")
+            }, 8000L)
+        } catch (e: SecurityException) {
+            promise.reject("GNSS_PERMISSION", e.message, e)
+        } catch (e: Exception) {
+            promise.reject("GNSS_UNAVAILABLE", e.message, e)
+        }
     }
 
     @ReactMethod

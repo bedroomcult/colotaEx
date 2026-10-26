@@ -729,6 +729,19 @@ class NativeLocationService {
     return this.safeExecute(() => LocationServiceModule.isLocationEnabled(), false, "isLocationEnabled failed")
   }
 
+  /**
+   * One-shot GNSS snapshot (satellites used / in view). Used by the dashboard
+   * when the tracking stream is off. Resolves null on any failure.
+   */
+  static async getGnssStatus(): Promise<{ satellitesUsed: number; satellitesInView: number } | null> {
+    this.ensureModule()
+    return this.safeExecute(
+      () => LocationServiceModule.getGnssStatus(),
+      null,
+      "getGnssStatus failed"
+    )
+  }
+
   /** Opens system Location settings. */
   static async openLocationSettings(): Promise<boolean> {
     this.ensureModule()
