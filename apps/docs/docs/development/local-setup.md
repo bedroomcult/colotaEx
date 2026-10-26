@@ -79,7 +79,7 @@ The app reads build configuration from `apps/mobile/android/app/build.gradle`. K
 
 | Property            | Default      | Description                |
 | ------------------- | ------------ | -------------------------- |
-| `applicationId`     | `com.Colota` | Android package identifier |
+| `applicationId`     | `com.colotaex` | Android package identifier |
 | `minSdkVersion`     | 26           | Minimum Android 8.0        |
 | `targetSdkVersion`  | 36           | Target Android 16          |
 | `compileSdkVersion` | 36           | Compile against Android 16 |
@@ -193,7 +193,7 @@ npx -w @colota/mobile tsc --noEmit    # TypeScript type check
 
 - TypeScript and React Native for the UI layer, Kotlin for the native modules
 - Follow the patterns the surrounding code already uses
-- Use `logger` from `src/utils/logger` instead of `console.log`, and `AppLogger` from `com.Colota.util.AppLogger` instead of `android.util.Log`
+- Use `logger` from `src/utils/logger` instead of `console.log`, and `AppLogger` from `com.colotaex.util.AppLogger` instead of `android.util.Log`
 - Cover every changed function, hook and component with a test
 - Run both flavors' unit tests and both debug builds when a change touches native code
 

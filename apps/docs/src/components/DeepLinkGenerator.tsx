@@ -251,7 +251,7 @@ export default function DeepLinkGenerator() {
   const deepLink = useMemo(() => {
     if (isEmpty) return ""
     const encoded = btoa(JSON.stringify(config))
-    return `colota://setup?config=${encoded}`
+    return `colotaex://setup?config=${encoded}`
   }, [config, isEmpty])
 
   const isQrTooLarge = deepLink.length > QR_MAX_SCANNABLE_LENGTH

@@ -308,7 +308,7 @@ For backups, two `internal` methods support the export/import flow without expos
 | `AutoExportConfig` | Typed data class wrapping auto-export settings (interval, time-of-day, weekday, day-of-month, enabledAt) from the SQLite settings table with validation, `isExportDue()` and `nextExportTimestamp()` |
 | `ExportConverters` | Native CSV/GeoJSON/GPX/KML serialization for "Export all" (flat, streamed via `exportToFile`). In-memory, streaming, and file-based interfaces. `TripConverters` writes the per-trip / multi-select export (`convertTrips`, reached through the `exportTripsToFile` bridge), and `ExportFilenames` names auto-export files and picks the ones retention deletes |
 | `ShortcutHandlerActivity` | Transparent activity handling app shortcut intents (start/stop tracking) without UI. Delegates to the shared `TrackingControl` helper |
-| `TrackingControlReceiver` | Exported broadcast receiver for automation apps - `com.Colota.action.START_TRACKING` / `STOP_TRACKING` start or stop tracking from saved settings. Delegates to `TrackingControl` |
+| `TrackingControlReceiver` | Exported broadcast receiver for automation apps - `com.colotaex.action.START_TRACKING` / `STOP_TRACKING` start or stop tracking from saved settings. Delegates to `TrackingControl` |
 | `TrackingControl` | Shared start/stop tracking actions used by both triggers above: reads config from DB via `ServiceConfig.fromDatabase()`, starts the foreground service and fires the started event; stop is routed through the service so `stopForegroundServiceWithReason` runs |
 
 ## React Native Layer
@@ -340,8 +340,8 @@ For backups, two `internal` methods support the export/import flow without expos
 | `OfflineMapsScreen` | Download and manage offline map areas - the viewport as the bounding box with a live estimate, one download at a time with progress the screen picks up again on return, re-download and delete, a Map style changed mark |
 | `DataManagementScreen` | Database ledger, manual flush, compaction, deletes by sync state or age |
 | `BackupRestoreScreen` | Create or restore a password-encrypted `.colota` archive of all data, with strength meter and no-recovery confirmation |
-| `SetupImportScreen` | Confirmation screen for `colota://setup` deep link imports |
-| `ShareSetupScreen` | Bundles selected config categories into a `colota://setup` link to share; credentials opt-in |
+| `SetupImportScreen` | Confirmation screen for `colotaex://setup` deep link imports |
+| `ShareSetupScreen` | Bundles selected config categories into a `colotaex://setup` link to share; credentials opt-in |
 | `LoggingScreen` | Records a log file and saves it as one file: capture state, the toggle, and the save and delete actions, which are absent while the file is empty |
 | `LogPreviewScreen` | Reads the recorded file, or the system log while recording is off. Newest first, search, and a single-select severity floor whose chips carry their own counts |
 | `AboutScreen` | The app's icon and name over the version with its build code, then the privacy policy, licence and source links and the copyright notice; map credits stay on the map's own dialog |

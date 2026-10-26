@@ -27,7 +27,7 @@ Colota sends your location to your own server over HTTP(S). It works offline, su
 - **Tracking Profiles** - Automatically adjust GPS interval, distance filter and sync settings based on conditions like charging, Android Auto, Wi-Fi, a Bluetooth device, speed or stationary detection.
 - **Flexible Sync** - Instant, batch or offline modes. Restrict sync to Wi-Fi, a specific SSID or VPN.
 - **App Shortcuts** - Long-press the app icon to start or stop tracking directly from the home screen, compatible with automation apps like Tasker and Samsung Routines.
-- **Quick Setup** - Configure devices via `colota://setup` deep links or QR codes.
+- **Quick Setup** - Configure devices via `colotaex://setup` deep links or QR codes.
 - **Authentication** - Basic Auth, Bearer Token or custom headers. Optional mutual TLS (mTLS) with a PKCS12 client certificate stored in Android Keystore.
 - **Dark Mode** - Full light and dark theme support.
 - **Languages** - English, Spanish and Simplified Chinese. [Help translate](https://colota.app/docs/development/translations).

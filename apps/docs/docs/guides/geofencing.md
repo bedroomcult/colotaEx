@@ -67,7 +67,7 @@ You can share all your geofences with another device or another user via a setup
 
 1. Open the **Geofences** screen
 2. Tap the share icon in the top bar
-3. The system share sheet opens with a `colota://setup?config=...` link
+3. The system share sheet opens with a `colotaex://setup?config=...` link
 4. Send the link through any messenger, email or as a QR code
 
 When the recipient opens the link, Colota shows the import confirmation screen listing every incoming zone. By default, tapping **Apply Configuration** appends the zones to the recipient's existing list. A "Replace zones with the same name" toggle on the confirmation screen swaps incoming zones for any existing zones whose names match - the original zones are deleted before the new ones are created.

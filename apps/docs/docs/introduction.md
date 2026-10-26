@@ -23,7 +23,7 @@ Colota is a self-hosted GPS tracking app for Android. It sends your location to 
 - **Flexible Sync** - Instant, batch, Wi-Fi only or offline modes.
 - **Display Settings** - Choose between metric and imperial units, 12h or 24h time format. Auto-detected from device locale on first use.
 - **App Shortcuts** - Long-press the app icon to start or stop tracking from the home screen. Compatible with automation apps like Tasker and Samsung Routines.
-- **Quick Setup** - Configure devices via `colota://setup` deep links or QR codes.
+- **Quick Setup** - Configure devices via `colotaex://setup` deep links or QR codes.
 - **Authentication** - Basic auth, bearer token or custom headers. Optional mutual TLS (mTLS) with a PKCS12 client certificate stored in Android Keystore.
 - **Dark Mode** - Full light and dark theme support, optionally coloured from the Android wallpaper.
 - **Languages** - English, Spanish and Simplified Chinese. [Help translate](/docs/development/translations).
@@ -56,8 +56,8 @@ Colota has twenty-seven screens, each focused on a specific task:
 | **Auto-export** | Configure scheduled exports: directory, format, frequency, time of day (with weekday or day-of-month for weekly/monthly), export range and file retention |
 | **Data management** | Delete by sync state or age, compact the database |
 | **Backup & restore** | Create or restore a single password-encrypted `.colota` archive of all data (locations, settings, geofences, credentials) |
-| **Setup Import** | Confirmation screen for deep link configuration imports (`colota://setup`) |
-| **Share setup** | Build a `colota://setup` link or QR code from selected settings to configure another device |
+| **Setup Import** | Confirmation screen for deep link configuration imports (`colotaex://setup`) |
+| **Share setup** | Build a `colotaex://setup` link or QR code from selected settings to configure another device |
 | **Logging** | In-app activity log viewer (level filtering, search, export) plus opt-in persistent file logging |
 | **About** | Version and build, then the privacy policy, licence and source code |
 

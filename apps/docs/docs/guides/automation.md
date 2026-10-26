@@ -52,10 +52,10 @@ A more direct path for power users: Colota exposes start and stop as Android bro
 
 | Action                             | Effect                                                |
 | ---------------------------------- | ----------------------------------------------------- |
-| `com.Colota.action.START_TRACKING` | Starts the tracking service using your saved settings |
-| `com.Colota.action.STOP_TRACKING`  | Stops the tracking service                            |
+| `com.colotaex.action.START_TRACKING` | Starts the tracking service using your saved settings |
+| `com.colotaex.action.STOP_TRACKING`  | Stops the tracking service                            |
 
-Action strings are **case-sensitive**. `com.Colota` with a capital **C** is correct - the lowercase form (`com.colota`) is silently ignored.
+Action strings are **case-sensitive**. `com.colotaex` is the package for this build - any other spelling is silently ignored.
 
 A short toast confirms each action.
 
@@ -63,9 +63,9 @@ A short toast confirms each action.
 
 1. Create a new Task
 2. Add action → **System** → **Send Intent**
-3. Set **Action** to `com.Colota.action.START_TRACKING` (or `STOP_TRACKING`)
+3. Set **Action** to `com.colotaex.action.START_TRACKING` (or `STOP_TRACKING`)
 4. Set **Target** to **Broadcast Receiver**
-5. Set **Package** to `com.Colota`
+5. Set **Package** to `com.colotaex`
 
 ### Security note
 

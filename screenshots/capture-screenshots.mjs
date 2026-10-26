@@ -15,7 +15,7 @@ const GPX = join(SCREENSHOTS, "demo-track.gpx")
 const SDK = process.env.ANDROID_HOME ?? join(homedir(), "Android", "Sdk")
 const AVD = "colota_a14"
 const MAESTRO = join(homedir(), ".maestro", "bin", "maestro")
-const APP_ID = "com.Colota"
+const APP_ID = "com.colotaex"
 const STAND_IN_PORT = 8080
 const DEMO_FILE = "colota-demo-timeline.json"
 const AREA_NAME = "Dolomites"
@@ -256,7 +256,7 @@ prepareDevice()
 const work = mkdtempSync(join(tmpdir(), "colota-capture-"))
 writeFileSync(join(work, DEMO_FILE), JSON.stringify(demoTimeline(track)))
 adb("push", join(work, DEMO_FILE), `/sdcard/Download/${DEMO_FILE}`)
-const setupLink = `colota://setup?config=${encodeURIComponent(Buffer.from(JSON.stringify(setup)).toString("base64"))}`
+const setupLink = `colotaex://setup?config=${encodeURIComponent(Buffer.from(JSON.stringify(setup)).toString("base64"))}`
 const env = {
   SETUP_LINK: setupLink,
   AREA_NAME,

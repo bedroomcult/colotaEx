@@ -6,7 +6,7 @@ import DeepLinkGenerator from '@site/src/components/DeepLinkGenerator'
 
 # Deep Link Setup
 
-Configure Colota instantly using a `colota://setup` URL. Generate a link or QR code with your server settings and share it with users - no manual typing required.
+Configure Colota instantly using a `colotaex://setup` URL. Generate a link or QR code with your server settings and share it with users - no manual typing required.
 
 ## Link Generator
 
@@ -16,7 +16,7 @@ Fill in the settings you want to configure. Only the fields you set will be incl
 
 ## Sharing From the App
 
-You can also generate a setup link straight from an existing installation, without the browser generator. Open **Settings → Share setup**, tick which categories to include - Tracking, Sync, API, Geofences, Tracking profiles and Credentials - and tap **Share** to send the `colota://setup` link through any app.
+You can also generate a setup link straight from an existing installation, without the browser generator. Open **Settings → Share setup**, tick which categories to include - Tracking, Sync, API, Geofences, Tracking profiles and Credentials - and tap **Share** to send the `colotaex://setup` link through any app.
 
 import ScreenshotGallery from '@site/src/components/ScreenshotGallery'
 
@@ -39,7 +39,7 @@ Geofences and tracking profiles can also be shared on their own from the [Geofen
 ## URL Format
 
 ```
-colota://setup?config=BASE64_ENCODED_JSON
+colotaex://setup?config=BASE64_ENCODED_JSON
 ```
 
 The `config` parameter is a base64-encoded JSON object. Only include the settings you want to change - everything else keeps its current value.
@@ -132,7 +132,7 @@ const config = {
   ]
 };
 const encoded = Buffer.from(JSON.stringify(config)).toString('base64');
-console.log('colota://setup?config=' + encoded);
+console.log('colotaex://setup?config=' + encoded);
 "
 ```
 
@@ -143,7 +143,7 @@ python3 -c "
 import json, base64
 config = {'endpoint': 'https://my-server.com/api/locations', 'interval': 10}
 encoded = base64.b64encode(json.dumps(config).encode()).decode()
-print(f'colota://setup?config={encoded}')
+print(f'colotaex://setup?config={encoded}')
 "
 ```
 
@@ -152,4 +152,4 @@ print(f'colota://setup?config={encoded}')
 - The configuration URL is not encrypted. Avoid putting sensitive tokens in QR codes displayed in public.
 - All settings are shown to the user for confirmation before being applied.
 - A link whose server address is rejected cannot be applied at all. The screen shows the reason and offers only **Go back**.
-- Any app, web page or message can open a `colota://setup` link. Apply one only if you trust where it came from, and read the host under **Sends locations to** before applying.
+- Any app, web page or message can open a `colotaex://setup` link. Apply one only if you trust where it came from, and read the host under **Sends locations to** before applying.
