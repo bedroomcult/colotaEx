@@ -55,6 +55,11 @@ const SPEED_RAMP_MAX_MPS = 8
 export function rampColor(t: number): string {
   const clamped = Math.max(0, Math.min(1, t))
   const scaled = clamped * (SPEED_RAMP_STOPS.length - 1)
+  // A ratio that lands on a stop (a third, two thirds) must return that stop,
+  // not a near-identical interpolation of it: doubles rarely hit integers exactly.
+  const snapped = Math.round(scaled)
+  if (Math.abs(scaled - snapped) < 1e-9)
+    return SPEED_RAMP_STOPS[Math.min(snapped, SPEED_RAMP_STOPS.length - 1)]
   const index = Math.min(Math.floor(scaled), SPEED_RAMP_STOPS.length - 2)
   return lerpColor(SPEED_RAMP_STOPS[index], SPEED_RAMP_STOPS[index + 1], scaled - index)
 }
