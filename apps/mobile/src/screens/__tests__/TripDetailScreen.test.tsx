@@ -40,8 +40,18 @@ jest.mock("../../components/features/inspector/TrackMap", () => {
         R.createElement(
           Text,
           { testID: "TrackMap-frame" },
-          JSON.stringify({ cameraPadding: props.cameraPadding, controlsBottom: props.controlsBottom })
+          JSON.stringify({
+            cameraPadding: props.cameraPadding,
+            controlsBottom: props.controlsBottom,
+            pointsToggle: props.pointsToggle,
+            showPoints: props.showPoints
+          })
         ),
+        R.createElement(Pressable, {
+          key: "toggle-points",
+          testID: "TrackMap-toggle-points",
+          onPress: () => props.onToggleShowPoints?.()
+        }),
         trigger(props, "select-point-first", (l) => l[0]),
         trigger(props, "select-point", (l) => l[2]),
         trigger(props, "select-point-last", (l) => l[l.length - 1])
@@ -270,22 +280,47 @@ describe("TripDetailScreen - point card over the map", () => {
       left: space.lg,
       right: space.lg + size.iconColumn + space.lg
     }
+    const withToggle = (frame: any) => ({ ...frame, pointsToggle: true, showPoints: true })
     expect(queryByTestId("point-card")).toBeNull()
-    expect(frame()).toEqual({ cameraPadding: base, controlsBottom: space.lg + space.sm })
+    expect(frame()).toEqual(
+      withToggle({ cameraPadding: base, controlsBottom: space.lg + space.sm })
+    )
 
     fireEvent.press(getByTestId("select-point"))
     fireEvent(getByTestId("inspector-dock"), "layout", { nativeEvent: { layout: { height: 200 } } })
 
     expect(getByTestId("point-card")).toBeTruthy()
-    expect(frame()).toEqual({
-      cameraPadding: { ...base, bottom: 200 + space.lg + space.lg },
-      controlsBottom: space.lg + 200 + space.sm
-    })
+    expect(frame()).toEqual(
+      withToggle({
+        cameraPadding: { ...base, bottom: 200 + space.lg + space.lg },
+        controlsBottom: space.lg + 200 + space.sm
+      })
+    )
 
     fireEvent.press(getByTestId("point-close"))
 
     expect(queryByTestId("point-card")).toBeNull()
-    expect(frame()).toEqual({ cameraPadding: base, controlsBottom: space.lg + space.sm })
+    expect(frame()).toEqual(
+      withToggle({ cameraPadding: base, controlsBottom: space.lg + space.sm })
+    )
+  })
+
+  it("toggles the point layer off and back, dropping the card while hidden", async () => {
+    const { getByTestId, queryByTestId } = render(<TripDetailScreen {...makeProps(makeTrip(4))} />)
+    await act(async () => {})
+    const frame = () => JSON.parse(getByTestId("TrackMap-frame").props.children)
+    expect(frame().pointsToggle).toBe(true)
+    expect(frame().showPoints).toBe(true)
+
+    fireEvent.press(getByTestId("select-point"))
+    expect(getByTestId("point-card")).toBeTruthy()
+
+    fireEvent.press(getByTestId("TrackMap-toggle-points"))
+    expect(frame().showPoints).toBe(false)
+    expect(queryByTestId("point-card")).toBeNull()
+
+    fireEvent.press(getByTestId("TrackMap-toggle-points"))
+    expect(frame().showPoints).toBe(true)
   })
 
   it("offers split and a note but no delete, since a trip's points are removed with the trip", async () => {

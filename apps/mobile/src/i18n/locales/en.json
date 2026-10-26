@@ -1077,6 +1077,8 @@
   "template.reitti.description": "OwnTracks-compatible format for Reitti",
   "template.traccar.description": "Traccar OsmAnd protocol (HTTP GET)",
   "trackMap.fit": "Fit the day",
+  "trackMap.showPoints": "Show points",
+  "trackMap.hidePoints": "Hide points",
   "tracking.every": "Records every {{duration}}",
   "tracking.interval.instantSync": "Syncs each fix",
   "tracking.interval.sync": "Syncs every {{duration}}",

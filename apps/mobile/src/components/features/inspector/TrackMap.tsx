@@ -7,7 +7,7 @@ import React, { useRef, useEffect, useMemo, useState, useCallback } from "react"
 import { View, StyleSheet } from "react-native"
 import { GeoJSONSource, Layer, type PressEventWithFeatures, type ViewPadding } from "@maplibre/maplibre-react-native"
 import type { NativeSyntheticEvent } from "react-native"
-import { LocateFixed } from "lucide-react-native"
+import { Circle, CircleDot, LocateFixed } from "lucide-react-native"
 import { ThemeColors, Trip } from "../../../types/global"
 import { getTripColor } from "../../../utils/trips"
 import { MapActionButton } from "../map/MapActionButton"
@@ -73,6 +73,11 @@ interface Props {
   controlsBottom: number
   controlsEnd: number
   onMapReady?: () => void
+  /** Renders the points toggle disc. Trip Detail only; the day map omits it. */
+  pointsToggle?: boolean
+  /** Hide the per-fix point circles (line, terminals and selection ring stay). Default true. */
+  showPoints?: boolean
+  onToggleShowPoints?: () => void
 }
 
 export function TrackMap({
@@ -90,7 +95,10 @@ export function TrackMap({
   cameraPadding,
   controlsBottom,
   controlsEnd,
-  onMapReady
+  onMapReady,
+  pointsToggle = false,
+  showPoints = true,
+  onToggleShowPoints
 }: Props) {
   const mapRef = useRef<ColotaMapRef>(null)
   const [isCentered, setIsCentered] = useState(true)
@@ -382,33 +390,56 @@ export function TrackMap({
             </>
           )}
         </GeoJSONSource>
-        <GeoJSONSource id="track-points" data={pointsGeoJSON} onPress={handlePointPress} hitbox={POINT_HITBOX}>
-          <Layer id="track-point-circles" type="circle" style={trackPointStyle} />
-        </GeoJSONSource>
+        {showPoints && (
+          <GeoJSONSource id="track-points" data={pointsGeoJSON} onPress={handlePointPress} hitbox={POINT_HITBOX}>
+            <Layer id="track-point-circles" type="circle" style={trackPointStyle} />
+          </GeoJSONSource>
+        )}
         <GeoJSONSource id="trip-terminals" data={terminalsGeoJSON}>
           <Layer id="trip-start" type="circle" filter={START_FILTER} style={terminalStyles.start} />
           <Layer id="trip-end" type="circle" filter={END_FILTER} style={terminalStyles.end} />
         </GeoJSONSource>
-        <GeoJSONSource id="highlight-point" data={highlightGeoJSON}>
-          <Layer id="highlight-circle" type="circle" style={highlightStyle} />
-        </GeoJSONSource>
+        {showPoints && (
+          <GeoJSONSource id="highlight-point" data={highlightGeoJSON}>
+            <Layer id="highlight-circle" type="circle" style={highlightStyle} />
+          </GeoJSONSource>
+        )}
       </ColotaMapView>
 
-      {hasPoints && !isCentered && (
-        <MapActionButton
-          onPress={handleFitDay}
-          anchored={false}
-          style={[styles.fitDay, { bottom: controlsBottom + size.iconColumn + space.lg, right: controlsEnd }]}
-          accessibilityRole="button"
-          accessibilityLabel={t("trackMap.fit")}
-        >
-          <LocateFixed size={size.icon.md} color={colors.textLight} />
-        </MapActionButton>
+      {hasPoints && (pointsToggle || !isCentered) && (
+        <View style={[styles.discColumn, { bottom: controlsBottom, right: controlsEnd }]}>
+          {pointsToggle && (
+            <MapActionButton
+              onPress={onToggleShowPoints}
+              anchored={false}
+              accessibilityRole="button"
+              accessibilityLabel={showPoints ? t("trackMap.hidePoints") : t("trackMap.showPoints")}
+              accessibilityState={{ selected: showPoints }}
+              testID="toggle-points-btn"
+            >
+              {showPoints ? (
+                <CircleDot size={size.icon.md} color={colors.primary} />
+              ) : (
+                <Circle size={size.icon.md} color={colors.textLight} />
+              )}
+            </MapActionButton>
+          )}
+          {!isCentered && (
+            <MapActionButton
+              onPress={handleFitDay}
+              anchored={false}
+              accessibilityRole="button"
+              accessibilityLabel={t("trackMap.fit")}
+            >
+              <LocateFixed size={size.icon.md} color={colors.textLight} />
+            </MapActionButton>
+          )}
+        </View>
       )}
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  fitDay: { position: "absolute" }
+  discColumn: { position: "absolute", gap: space.lg }
 })

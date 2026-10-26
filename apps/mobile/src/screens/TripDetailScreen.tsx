@@ -64,6 +64,7 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
   // route.params, so a saved note has to be held here rather than inside the map.
   const [noteOverrides, setNoteOverrides] = useState<Record<number, string | undefined>>({})
   const [selectedPointId, setSelectedPointId] = useState<number | null>(null)
+  const [showPoints, setShowPoints] = useState(true)
   const [dockHeight, setDockHeight] = useState(0)
   const [hasEndpoint, setHasEndpoint] = useState(false)
 
@@ -113,7 +114,15 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
   useEffect(() => {
     setExportOpen(false)
     setSelectedPointId(null)
+    setShowPoints(true)
   }, [trip.index])
+
+  const handleToggleShowPoints = useCallback(() => {
+    setShowPoints((prev) => {
+      if (prev) setSelectedPointId(null)
+      return !prev
+    })
+  }, [])
 
   const goToTrip = useCallback(
     (target: Trip | null) => {
@@ -307,6 +316,9 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
           noteOverrides={noteOverrides}
           selectedPointId={selectedPointId}
           onSelectPoint={setSelectedPointId}
+          pointsToggle
+          showPoints={showPoints}
+          onToggleShowPoints={handleToggleShowPoints}
           onFocusTrip={() => {}}
           cameraPadding={cameraPadding}
           controlsBottom={controlsBottom}

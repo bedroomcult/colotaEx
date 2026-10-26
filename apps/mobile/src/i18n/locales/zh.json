@@ -1077,6 +1077,8 @@
   "template.reitti.description": "兼容 OwnTracks 的 Reitti 格式",
   "template.traccar.description": "Traccar OsmAnd 协议（HTTP GET）",
   "trackMap.fit": "显示当天全部轨迹",
+  "trackMap.showPoints": "显示轨迹点",
+  "trackMap.hidePoints": "隐藏轨迹点",
   "tracking.every": "每 {{duration}}",
   "tracking.interval.instantSync": "即时同步",
   "tracking.interval.sync": "同步 {{duration}}",

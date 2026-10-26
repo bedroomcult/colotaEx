@@ -488,15 +488,17 @@ describe("TrackMap fit-the-day disc", () => {
     expect(queryByRole("button")).toBeNull()
   })
 
-  it("sits one slot above the attribution disc in the screen's disc column", () => {
+  it("sits in the screen's disc column above the attribution disc", () => {
     const { getByRole } = renderMap()
     panMap()
 
     let disc = getByRole("button").parent as Node | null
     while (disc && disc.type !== "View") disc = disc.parent
-    const style = flat(disc!.props.style)
+    let column = disc!.parent
+    while (column && column.type !== "View") column = column.parent
+    const style = flat(column!.props.style)
     expect(style.position).toBe("absolute")
-    expect(style.bottom).toBe(frame.controlsBottom + size.iconColumn + space.lg)
+    expect(style.bottom).toBe(frame.controlsBottom)
     expect(style.right).toBe(frame.controlsEnd)
   })
 
@@ -511,6 +513,72 @@ describe("TrackMap fit-the-day disc", () => {
     renderMap()
 
     expect(mockMapProps.mock.calls.at(-1)![0]).toMatchObject(frame)
+  })
+})
+
+describe("TrackMap points toggle", () => {
+  it("renders no toggle by default, so the day map is unchanged", () => {
+    const { queryByTestId, getByTestId } = renderMap({ fitVersion: 1 })
+    expect(queryByTestId("toggle-points-btn")).toBeNull()
+    expect(getByTestId("track-points")).toBeTruthy()
+  })
+
+  it("renders the toggle with points on, and fires the handler on press", () => {
+    const onToggleShowPoints = jest.fn()
+    const { getByTestId } = renderMap({ pointsToggle: true, onToggleShowPoints, fitVersion: 1 })
+
+    const toggle = getByTestId("toggle-points-btn")
+    expect(toggle.props.accessibilityLabel).toBe("Hide points")
+    expect(toggle.props.accessibilityState).toEqual({ selected: true })
+    fireEvent.press(toggle)
+    expect(onToggleShowPoints).toHaveBeenCalledTimes(1)
+    expect(getByTestId("track-points")).toBeTruthy()
+    expect(getByTestId("trip-start")).toBeTruthy()
+    expect(getByTestId("trip-end")).toBeTruthy()
+  })
+
+  it("hides the points and highlight when off, keeping the line and terminals", () => {
+    const { queryByTestId, getByTestId } = renderMap({
+      pointsToggle: true,
+      showPoints: false,
+      fitVersion: 1
+    })
+
+    expect(queryByTestId("track-points")).toBeNull()
+    expect(queryByTestId("highlight-point")).toBeNull()
+    expect(getByTestId("trip-start")).toBeTruthy()
+    expect(getByTestId("trip-end")).toBeTruthy()
+    expect(getByTestId("track-segments")).toBeTruthy()
+    expect(getByTestId("toggle-points-btn").props.accessibilityLabel).toBe("Show points")
+  })
+
+  it("stacks the toggle above the locate disc in one column", () => {
+    const { getByTestId, getByRole } = renderMap({ pointsToggle: true, fitVersion: 1 })
+    panMap()
+
+    const toggle = getByTestId("toggle-points-btn")
+    let column = toggle.parent as Node | null
+    while (column && column.type !== "View") column = column.parent
+    while (column && flat(column.props.style).position !== "absolute") column = column.parent
+    const style = flat(column!.props.style)
+    expect(style.bottom).toBe(frame.controlsBottom)
+    expect(style.right).toBe(frame.controlsEnd)
+    expect(getByRole("button", { name: "Hide points" })).toBeTruthy()
+    expect(getByRole("button", { name: "Fit the day" })).toBeTruthy()
+  })
+
+  it("parks the toggle in the bottom slot while centered, locate hidden", () => {
+    const { getByTestId, queryByRole } = renderMap({ pointsToggle: true, fitVersion: 1 })
+
+    expect(queryByRole("button", { name: "Fit the day" })).toBeNull()
+    expect(getByTestId("toggle-points-btn")).toBeTruthy()
+  })
+
+  it("stays away on an empty trip, where there is nothing to draw", () => {
+    const { queryByTestId } = renderMap({ pointsToggle: true, locations: [] })
+    panMap()
+
+    expect(queryByTestId("toggle-points-btn")).toBeNull()
   })
 })
 
