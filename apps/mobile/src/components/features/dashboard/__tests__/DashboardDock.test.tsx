@@ -152,10 +152,11 @@ describe("DashboardDock", () => {
   })
 
   it("spins the loader in the accent while searching, so a missing fix reads as work in progress", () => {
-    const { getByText, getByTestId } = renderDock({ tracking: true, hasFix: false })
+    const { getByText, getAllByText, getByTestId } = renderDock({ tracking: true, hasFix: false })
 
     expect(getByText("Searching for GPS")).toBeTruthy()
-    expect(getByText("No fix yet")).toBeTruthy()
+    // The GPS row echoes the same state while searching, so both name the missing fix.
+    expect(getAllByText("No fix yet")).toHaveLength(2)
     expect(getByTestId("icon-Loader").props.color).toBe(lightColors.primary)
     expect(getByTestId("icon-Loader").props.size).toBe(size.icon.md)
   })

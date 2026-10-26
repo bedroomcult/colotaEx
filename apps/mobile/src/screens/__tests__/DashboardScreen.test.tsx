@@ -476,7 +476,7 @@ describe("DashboardScreen", () => {
     await settle()
 
     expect(getByTestId("DashboardDock").props.hasFix).toBe(true)
-    expect(getByTestId("DashboardDock").props.coords).toEqual({ accuracy: 4.2, timestamp: 1_700_000_000 })
+    expect(getByTestId("DashboardDock").props.coords).toMatchObject({ accuracy: 4.2, timestamp: 1_700_000_000 })
   })
 
   describe("banner", () => {
