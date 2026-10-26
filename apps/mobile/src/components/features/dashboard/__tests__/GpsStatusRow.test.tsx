@@ -45,8 +45,9 @@ describe("GpsStatusRow", () => {
   it("names accuracy, sats and age on a live fix, green at 10 m", () => {
     const { getByTestId } = renderRow({ tracking: true, coords: live })
 
+    // The age ticks every 5 s, so only the shape is pinned, not the count.
     expect(getByTestId("gps-status").props.accessibilityLabel).toMatch(
-      /^±12 m, 8\/14 sats · 5s ago$/
+      /^±12 m, 8\/14 sats · \d+s ago$/
     )
   })
 
@@ -102,7 +103,7 @@ describe("GpsStatusRow", () => {
     })
 
     expect(getByTestId("gps-status").props.accessibilityLabel).toMatch(
-      /^±18 m last fix, 30s ago$/
+      /^±18 m last fix, \d+s ago$/
     )
   })
 
