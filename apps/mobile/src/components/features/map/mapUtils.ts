@@ -42,14 +42,31 @@ export function lerpColor(c1: string, c2: string, t: number): string {
 }
 
 /**
- * Returns a color for a given speed (m/s) using the theme's semantic colors.
- * Speed thresholds: <=2 green, 2-5 green->yellow, 5-8 yellow->red, >=8 red
+ * The speed ramp's stops, slowest to fastest: green, yellow, orange, red. Fixed rather than
+ * themed, so a speed means the same colour in light and dark and the four steps stay distinct.
  */
-export function getSpeedColor(speed: number, colors: ThemeColors): string {
-  if (speed <= 2) return colors.success
-  if (speed >= 8) return colors.error
-  if (speed <= 5) return lerpColor(colors.success, colors.warning, (speed - 2) / 3)
-  return lerpColor(colors.warning, colors.error, (speed - 5) / 3)
+const SPEED_RAMP_STOPS = ["#2E9E4F", "#E8C547", "#E8813A", "#D93A3A"] as const
+
+/** Absolute speeds the ramp spans: below the first is green, above the last is red. */
+const SPEED_RAMP_MIN_MPS = 2
+const SPEED_RAMP_MAX_MPS = 8
+
+/** Interpolates along the four-stop speed ramp; t is 0 (slowest) to 1 (fastest). */
+export function rampColor(t: number): string {
+  const clamped = Math.max(0, Math.min(1, t))
+  const scaled = clamped * (SPEED_RAMP_STOPS.length - 1)
+  const index = Math.min(Math.floor(scaled), SPEED_RAMP_STOPS.length - 2)
+  return lerpColor(SPEED_RAMP_STOPS[index], SPEED_RAMP_STOPS[index + 1], scaled - index)
+}
+
+/**
+ * Returns a color for a given speed (m/s) on the same green-yellow-orange-red ramp the trip
+ * gradient uses, so a point and its segment never disagree. Below 2 m/s green, above 8 m/s red.
+ */
+export function getSpeedColor(speed: number): string {
+  if (speed <= SPEED_RAMP_MIN_MPS) return SPEED_RAMP_STOPS[0]
+  if (speed >= SPEED_RAMP_MAX_MPS) return SPEED_RAMP_STOPS[SPEED_RAMP_STOPS.length - 1]
+  return rampColor((speed - SPEED_RAMP_MIN_MPS) / (SPEED_RAMP_MAX_MPS - SPEED_RAMP_MIN_MPS))
 }
 
 /**
@@ -69,15 +86,13 @@ export function speedRange(locations: ArrayLike<{ speed?: number }>): { min: num
 
 /**
  * Colour along a ramp scaled to this trip's own range rather than absolute thresholds, so a walk
- * and a drive both show contrast. The slowest fixes are green and the fastest red.
+ * and a drive both show contrast. Green at the slowest fix, red at the fastest, with yellow and
+ * orange in between.
  */
-export function speedRampColor(speed: number, min: number, max: number, colors: ThemeColors): string {
-  if (!(max > min) || speed <= min) return colors.success
-  if (speed >= max) return colors.error
-  const t = (speed - min) / (max - min)
-  return t <= 0.5
-    ? lerpColor(colors.success, colors.warning, t * 2)
-    : lerpColor(colors.warning, colors.error, (t - 0.5) * 2)
+export function speedRampColor(speed: number, min: number, max: number): string {
+  if (!(max > min) || speed <= min) return SPEED_RAMP_STOPS[0]
+  if (speed >= max) return SPEED_RAMP_STOPS[SPEED_RAMP_STOPS.length - 1]
+  return rampColor((speed - min) / (max - min))
 }
 
 // ============================================================================
@@ -146,7 +161,7 @@ interface TrackSegmentOptions {
  *  Pass `locationTrips` to stamp each feature with its `tripIndex` and a `focused` flag. */
 export function buildTrackSegmentsGeoJSON(
   locations: TrackLocation[],
-  colors: ThemeColors,
+  _colors: ThemeColors,
   options?: TrackSegmentOptions
 ): GeoJSON.FeatureCollection {
   const { skipIndices, locationColors, defaultColor, locationTrips, focusedTrip } = options ?? {}
@@ -183,7 +198,7 @@ export function buildTrackSegmentsGeoJSON(
       ? defaultColor
       : locationColors
         ? locationColors[i]
-        : getSpeedColor(((locations[i - 1].speed ?? 0) + (locations[i].speed ?? 0)) / 2, colors)
+        : getSpeedColor(((locations[i - 1].speed ?? 0) + (locations[i].speed ?? 0)) / 2)
     const trip = locationTrips ? locationTrips[i] : -1
 
     if (currentColor === null) {
@@ -237,7 +252,7 @@ export function buildTripTerminalsGeoJSON(
  *  Pass `locationColors` to override speed-based dot coloring. */
 export function buildTrackPointsGeoJSON(
   locations: TrackLocation[],
-  colors: ThemeColors,
+  _colors: ThemeColors,
   locationColors?: string[]
 ): GeoJSON.FeatureCollection {
   return {
@@ -251,7 +266,7 @@ export function buildTrackPointsGeoJSON(
         accuracy: loc.accuracy ?? 0,
         altitude: loc.altitude ?? 0,
         note: loc.note ?? "",
-        color: locationColors ? locationColors[i] : getSpeedColor(loc.speed ?? 0, colors)
+        color: locationColors ? locationColors[i] : getSpeedColor(loc.speed ?? 0)
       },
       geometry: {
         type: "Point" as const,

@@ -280,7 +280,7 @@ describe("TripDetailScreen - point card over the map", () => {
       left: space.lg,
       right: space.lg + size.iconColumn + space.lg
     }
-    const withToggle = (frame: any) => ({ ...frame, pointsToggle: true, showPoints: true })
+    const withToggle = (mapFrame: any) => ({ ...mapFrame, pointsToggle: true, showPoints: true })
     expect(queryByTestId("point-card")).toBeNull()
     expect(frame()).toEqual(
       withToggle({ cameraPadding: base, controlsBottom: space.lg + space.sm })

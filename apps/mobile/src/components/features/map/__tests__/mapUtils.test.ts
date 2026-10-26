@@ -22,6 +22,9 @@ const colors = {
   info: "#1976D2"
 } as any
 
+/** The ramp's four stops: green, yellow, orange, red. */
+const RAMP = ["#2E9E4F", "#E8C547", "#E8813A", "#D93A3A"]
+
 // ============================================================================
 // lerpColor
 // ============================================================================
@@ -51,29 +54,25 @@ describe("lerpColor", () => {
 // ============================================================================
 
 describe("getSpeedColor", () => {
-  it("returns success (green) for speed <= 2 m/s", () => {
-    expect(getSpeedColor(0, colors)).toBe(colors.success)
-    expect(getSpeedColor(1, colors)).toBe(colors.success)
-    expect(getSpeedColor(2, colors)).toBe(colors.success)
+  it("returns green for speed <= 2 m/s", () => {
+    expect(getSpeedColor(0)).toBe(RAMP[0])
+    expect(getSpeedColor(1)).toBe(RAMP[0])
+    expect(getSpeedColor(2)).toBe(RAMP[0])
   })
 
-  it("returns error (red) for speed >= 8 m/s", () => {
-    expect(getSpeedColor(8, colors)).toBe(colors.error)
-    expect(getSpeedColor(15, colors)).toBe(colors.error)
+  it("returns red for speed >= 8 m/s", () => {
+    expect(getSpeedColor(8)).toBe(RAMP[3])
+    expect(getSpeedColor(15)).toBe(RAMP[3])
   })
 
-  it("returns interpolated color for speed between 2 and 5", () => {
-    const color = getSpeedColor(3.5, colors)
-    expect(color).toMatch(/^rgb\(\d+,\d+,\d+\)$/)
-    expect(color).not.toBe(colors.success)
-    expect(color).not.toBe(colors.warning)
+  it("walks the ramp through yellow and orange between the ends", () => {
+    // 4 m/s is a third of the 2-8 m/s span, so it lands on yellow.
+    expect(getSpeedColor(4)).toBe(RAMP[1])
+    expect(getSpeedColor(6)).toBe(RAMP[2])
   })
 
-  it("returns interpolated color for speed between 5 and 8", () => {
-    const color = getSpeedColor(6.5, colors)
-    expect(color).toMatch(/^rgb\(\d+,\d+,\d+\)$/)
-    expect(color).not.toBe(colors.warning)
-    expect(color).not.toBe(colors.error)
+  it("keeps the four stops distinct, so no two speeds share a colour", () => {
+    expect(new Set(RAMP).size).toBe(4)
   })
 })
 
@@ -102,30 +101,26 @@ describe("speedRange", () => {
 
 describe("speedRampColor", () => {
   it("is green at the slowest fix and red at the fastest, whatever the trip's own speeds are", () => {
-    expect(speedRampColor(0, 0, 30, colors)).toBe(colors.success)
-    expect(speedRampColor(30, 0, 30, colors)).toBe(colors.error)
+    expect(speedRampColor(0, 0, 30)).toBe(RAMP[0])
+    expect(speedRampColor(30, 0, 30)).toBe(RAMP[3])
     // A walking trip fills the same ramp as a drive
-    expect(speedRampColor(1.2, 1.2, 2, colors)).toBe(colors.success)
-    expect(speedRampColor(2, 1.2, 2, colors)).toBe(colors.error)
+    expect(speedRampColor(1.2, 1.2, 2)).toBe(RAMP[0])
+    expect(speedRampColor(2, 1.2, 2)).toBe(RAMP[3])
   })
 
-  it("interpolates on either side of the middle", () => {
-    const slowSide = speedRampColor(2.5, 0, 10, colors)
-    const fastSide = speedRampColor(7.5, 0, 10, colors)
-    for (const color of [slowSide, fastSide]) {
-      expect(color).toMatch(/^rgb\(\d+,\d+,\d+\)$/)
-      expect(color).not.toBe(colors.success)
-      expect(color).not.toBe(colors.error)
-    }
+  it("passes through yellow and orange on the way up", () => {
+    // A third of the range lands on yellow, two thirds on orange.
+    expect(speedRampColor(20 / 3, 0, 20)).toBe(RAMP[1])
+    expect(speedRampColor(40 / 3, 0, 20)).toBe(RAMP[2])
   })
 
   it("clamps a speed outside the range to its own end", () => {
-    expect(speedRampColor(-5, 0, 10, colors)).toBe(colors.success)
-    expect(speedRampColor(50, 0, 10, colors)).toBe(colors.error)
+    expect(speedRampColor(-5, 0, 10)).toBe(RAMP[0])
+    expect(speedRampColor(50, 0, 10)).toBe(RAMP[3])
   })
 
   it("keeps one colour when every fix reads the same, instead of dividing by zero", () => {
-    expect(speedRampColor(3, 3, 3, colors)).toBe(colors.success)
+    expect(speedRampColor(3, 3, 3)).toBe(RAMP[0])
   })
 })
 

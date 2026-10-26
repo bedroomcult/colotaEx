@@ -1,7 +1,8 @@
 import React from "react"
 import { render, act, fireEvent, within } from "@testing-library/react-native"
 import { TrackMap, POINT_HITBOX } from "../TrackMap"
-import { DEFAULT_MAP_ZOOM, MAP_ANIMATION_DURATION_MS, size, space } from "../../../../constants"
+import { rampColor } from "../../map/mapUtils"
+import { DEFAULT_MAP_ZOOM, MAP_ANIMATION_DURATION_MS, size } from "../../../../constants"
 import type { Trip } from "../../../../types/global"
 
 const mockFitBounds = jest.fn()
@@ -615,6 +616,8 @@ describe("TrackMap note overrides", () => {
 
 describe("TrackMap speed ramp", () => {
   const rampColors = require("@colota/shared").lightColors
+  // The ramp's fixed stops: green, yellow, orange, red.
+  const RAMP = ["#2E9E4F", "#E8C547", "#E8813A", "#D93A3A"]
   const locations = [
     { ...loc(52.5, 13.4), id: 1, speed: 0 },
     { ...loc(52.55, 13.45), id: 2, speed: 6 },
@@ -625,7 +628,17 @@ describe("TrackMap speed ramp", () => {
   it("ramps from the trip's slowest fix to a red at its fastest", () => {
     renderMap({ locations, colors: rampColors, colorMode: "speed" })
 
-    expect(drawnColors()).toEqual([rampColors.success, expect.any(String), rampColors.error])
+    expect(drawnColors()).toEqual([RAMP[0], expect.any(String), RAMP[3]])
+  })
+
+  it("passes through yellow and orange, so the middle speed is neither green nor red", () => {
+    renderMap({ locations, colors: rampColors, colorMode: "speed" })
+
+    const middle = drawnColors()[1]
+    expect(middle).not.toBe(RAMP[0])
+    expect(middle).not.toBe(RAMP[3])
+    // The middle fix sits on the orange band of the four-stop ramp.
+    expect(middle).toBe(rampColor(0.5))
   })
 
   it("colours the dots off the same ramp as the line, so a point never contradicts its segment", () => {

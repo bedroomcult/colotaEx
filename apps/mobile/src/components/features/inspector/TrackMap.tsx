@@ -215,11 +215,11 @@ export function TrackMap({
   const locationColors = useMemo(() => {
     if (colorMode === "speed") {
       const { min, max } = speedRange(locations)
-      return locations.map((loc) => speedRampColor(loc.speed ?? 0, min, max, colors))
+      return locations.map((loc) => speedRampColor(loc.speed ?? 0, min, max))
     }
     if (!tripIdByPoint || !trips) return locations.map(() => trackColor)
     return Array.from(tripIdByPoint, (tripId) => (tripId < 0 ? trackColor : getTripColor(trips[tripId].index)))
-  }, [colorMode, colors, tripIdByPoint, trips, locations, trackColor])
+  }, [colorMode, tripIdByPoint, trips, locations, trackColor])
 
   const locationTrips = useMemo(() => {
     if (!tripIdByPoint || !trips) return undefined

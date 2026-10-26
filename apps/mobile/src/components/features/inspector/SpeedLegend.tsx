@@ -34,7 +34,7 @@ export function SpeedLegend({ minSpeed, maxSpeed, style, testID = "speed-legend"
   const slow = formatSpeed(minSpeed)
   const fast = formatSpeed(maxSpeed)
   const steps = Array.from({ length: STEPS }, (_, i) =>
-    speedRampColor(minSpeed + ((maxSpeed - minSpeed) * i) / (STEPS - 1), minSpeed, maxSpeed, colors)
+    speedRampColor(minSpeed + ((maxSpeed - minSpeed) * i) / (STEPS - 1), minSpeed, maxSpeed)
   )
 
   return (
