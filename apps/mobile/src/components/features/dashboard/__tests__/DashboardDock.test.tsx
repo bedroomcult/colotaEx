@@ -72,11 +72,11 @@ const idleProps = {
   onNavigateToRequestFormat: jest.fn()
 }
 
-const trackingProps = {
+const trackingProps: React.ComponentProps<typeof DashboardDock> = {
   ...idleProps,
   tracking: true,
   hasFix: true,
-  coords: { accuracy: 4.2, timestamp: 1_700_000_000 }
+  coords: { latitude: 52.52, longitude: 13.405, accuracy: 4.2, timestamp: 1_700_000_000 }
 }
 
 const renderDock = (props: Partial<React.ComponentProps<typeof DashboardDock>> = {}) =>

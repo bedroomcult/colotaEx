@@ -31,7 +31,7 @@ function ageSeconds(timestampSec: number | undefined, nowMs: number): number | n
   return Math.max(0, Math.round(nowMs / 1000 - timestampSec))
 }
 
-function formatAge(ageSec: number | null, t: (key: string, opts?: any) => string): string | null {
+function formatAge(ageSec: number | null, t: (key: any, opts?: any) => string): string | null {
   if (ageSec == null) return null
   if (ageSec < 60) return t("gps.ageSeconds", { n: ageSec })
   return t("gps.ageMinutes", { n: Math.round(ageSec / 60) })
