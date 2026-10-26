@@ -46,7 +46,7 @@ describe("GpsStatusRow", () => {
     const { getByTestId } = renderRow({ tracking: true, coords: live })
 
     expect(getByTestId("gps-status").props.accessibilityLabel).toMatch(
-      /^±12 m, 8\/14 sats, 5s ago$/
+      /^±12 m, 8\/14 sats · 5s ago$/
     )
   })
 
@@ -89,6 +89,7 @@ describe("GpsStatusRow", () => {
       lastKnown: { accuracy: 30, timestamp: Math.floor(Date.now() / 1000) - 65 }
     })
 
+    // The dock state line names the same missing fix, so this row reads like its echo.
     expect(getByTestId("gps-status").props.accessibilityLabel).toMatch(
       /^Searching for GPS signal, No fix yet · 1 min ago$/
     )
