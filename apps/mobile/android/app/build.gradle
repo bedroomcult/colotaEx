@@ -94,8 +94,8 @@ android {
         applicationId "com.colotaex"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 55
-        versionName "1.22.4"
+        versionCode 56
+        versionName "1.22.5"
 
         // Strip Build IDs for reproducible builds (IzzyOnDroid/F-Droid)
         externalNativeBuild {
