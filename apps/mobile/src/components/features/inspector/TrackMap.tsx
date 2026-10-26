@@ -75,6 +75,7 @@ interface Props {
   onMapReady?: () => void
   /** Renders the points toggle disc. Trip Detail only; the day map omits it. */
   pointsToggle?: boolean
+  /** Noop default: `pointsToggle` alone renders a working-looking disc, the handler makes it act. */
   /** Hide the per-fix point circles (line, terminals and selection ring stay). Default true. */
   showPoints?: boolean
   onToggleShowPoints?: () => void
@@ -98,7 +99,7 @@ export function TrackMap({
   onMapReady,
   pointsToggle = false,
   showPoints = true,
-  onToggleShowPoints
+  onToggleShowPoints = () => {}
 }: Props) {
   const mapRef = useRef<ColotaMapRef>(null)
   const [isCentered, setIsCentered] = useState(true)
@@ -408,7 +409,7 @@ export function TrackMap({
 
       {hasPoints && (pointsToggle || !isCentered) && (
         <View style={[styles.discColumn, { bottom: controlsBottom, right: controlsEnd }]}>
-          {pointsToggle && onToggleShowPoints && (
+          {pointsToggle && (
             <MapActionButton
               onPress={onToggleShowPoints}
               anchored={false}
