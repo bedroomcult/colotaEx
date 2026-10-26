@@ -408,7 +408,7 @@ export function TrackMap({
 
       {hasPoints && (pointsToggle || !isCentered) && (
         <View style={[styles.discColumn, { bottom: controlsBottom, right: controlsEnd }]}>
-          {pointsToggle && (
+          {pointsToggle && onToggleShowPoints && (
             <MapActionButton
               onPress={onToggleShowPoints}
               anchored={false}
