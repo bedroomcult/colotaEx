@@ -135,6 +135,24 @@ class LocationServiceModuleTest {
     }
 
     @Test
+    fun `sendLocationEvent attaches satellite counts when known`() {
+        val map = slot<JavaOnlyMap>()
+        assertTrue(LocationServiceModule.sendLocationEvent(mockLocation(), 85, 2, 8, 14))
+        verify { mockEmitter.emit("onLocationUpdate", capture(map)) }
+        assertEquals(8, map.captured.getInt("satellitesUsed"))
+        assertEquals(14, map.captured.getInt("satellitesInView"))
+    }
+
+    @Test
+    fun `sendLocationEvent nulls satellite counts when unknown`() {
+        val map = slot<JavaOnlyMap>()
+        assertTrue(LocationServiceModule.sendLocationEvent(mockLocation(), 85, 2))
+        verify { mockEmitter.emit("onLocationUpdate", capture(map)) }
+        assertTrue(map.captured.isNull("satellitesUsed"))
+        assertTrue(map.captured.isNull("satellitesInView"))
+    }
+
+    @Test
     fun `sendLocationEvent returns false on exception`() {
         every {
             mockContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)

@@ -161,7 +161,13 @@ class LocationServiceModule(reactContext: ReactApplicationContext) :
 
         /** Skips when app is backgrounded to avoid unnecessary bridge overhead. */
         @JvmStatic
-        fun sendLocationEvent(location: android.location.Location, battery: Int, batteryStatus: Int): Boolean {
+        fun sendLocationEvent(
+            location: android.location.Location,
+            battery: Int,
+            batteryStatus: Int,
+            satellitesUsed: Int? = null,
+            satellitesInView: Int? = null
+        ): Boolean {
             if (!isAppInForeground) return false
             return emit("onLocationUpdate") {
                 putDouble("latitude", location.latitude)
@@ -173,6 +179,8 @@ class LocationServiceModule(reactContext: ReactApplicationContext) :
                 putDouble("timestamp", location.time.toDouble())
                 putInt("battery", battery)
                 putInt("batteryStatus", batteryStatus)
+                if (satellitesUsed != null) putInt("satellitesUsed", satellitesUsed) else putNull("satellitesUsed")
+                if (satellitesInView != null) putInt("satellitesInView", satellitesInView) else putNull("satellitesInView")
             }
         }
 

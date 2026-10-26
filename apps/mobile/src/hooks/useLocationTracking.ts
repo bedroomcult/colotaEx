@@ -73,7 +73,9 @@ export function useLocationTracking(settings: Settings, settingsHydrated: boolea
               bearing: latest.bearing ?? 0,
               timestamp: latest.timestamp ?? Math.floor(Date.now() / 1000),
               battery: latest.battery,
-              battery_status: latest.batteryStatus
+              battery_status: latest.batteryStatus,
+              satellitesUsed: latest.satellitesUsed ?? undefined,
+              satellitesInView: latest.satellitesInView ?? undefined
             })
           }
         } catch (err) {
@@ -101,7 +103,9 @@ export function useLocationTracking(settings: Settings, settingsHydrated: boolea
           bearing: event.bearing,
           timestamp: Math.floor(event.timestamp / 1000),
           battery: event.battery,
-          battery_status: event.batteryStatus
+          battery_status: event.batteryStatus,
+          satellitesUsed: event.satellitesUsed ?? undefined,
+          satellitesInView: event.satellitesInView ?? undefined
         })
       })
     }
@@ -322,7 +326,9 @@ export function useLocationTracking(settings: Settings, settingsHydrated: boolea
             bearing: latest.bearing ?? 0,
             timestamp: latest.timestamp ?? Math.floor(Date.now() / 1000),
             battery: latest.battery,
-            battery_status: latest.batteryStatus
+            battery_status: latest.batteryStatus,
+            satellitesUsed: latest.satellitesUsed ?? undefined,
+            satellitesInView: latest.satellitesInView ?? undefined
           })
         }
       } catch (err) {
@@ -376,7 +382,9 @@ export function useLocationTracking(settings: Settings, settingsHydrated: boolea
                 bearing: latest.bearing ?? 0,
                 timestamp: latest.timestamp ?? Math.floor(Date.now() / 1000),
                 battery: latest.battery,
-                battery_status: latest.batteryStatus
+                battery_status: latest.batteryStatus,
+                satellitesUsed: latest.satellitesUsed ?? undefined,
+                satellitesInView: latest.satellitesInView ?? undefined
               })
             }
           })

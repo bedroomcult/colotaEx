@@ -73,6 +73,12 @@ class LocationForegroundService : Service() {
     @Volatile private var motionDetector: MotionStateDetector? = null
     @Volatile private var lastKnownLocation: Location? = null
 
+    // Last GNSS satellite counts. GNSS callbacks arrive independently of fixes, so the latest
+    // values attach to each outgoing fix and event. Null until the first callback.
+    @Volatile private var lastSatellitesUsed: Int? = null
+    @Volatile private var lastSatellitesInView: Int? = null
+    private var gnssCallback: android.location.GnssStatus.Callback? = null
+
     // Rate-limit the fresh-fix probe so repeated rechecks/resumes don't spin up GNSS. Main-thread only.
     @Volatile private var lastFreshProbeAtMs: Long? = null
     @Volatile private var freshProbeInFlight = false
@@ -566,6 +572,7 @@ class LocationForegroundService : Service() {
                 callback = callback
             )
             lastRequestedBypassOsFilter = bypassOsFilter
+            registerGnssStatus()
 
             // A restored pause must be re-checked against a fresh fix: a cached fix can only re-enter,
             // never exit, so a departed user would stay latched. A usable fix resumes only if it places
@@ -618,8 +625,43 @@ class LocationForegroundService : Service() {
     private fun stopLocationUpdates() {
         // The heartbeat logger outlives the stream; the watchdog only probes while it is live.
         stopPauseWatchdog()
+        unregisterGnssStatus()
         locationUpdateCallback?.let { locationProvider.removeLocationUpdates(it) }
         locationUpdateCallback = null
+    }
+
+    /** GNSS satellite counts ride the same location grant; failures are best-effort (row shows "-"). */
+    private fun registerGnssStatus() {
+        try {
+            val manager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+            val callback = object : android.location.GnssStatus.Callback() {
+                override fun onSatelliteStatusChanged(status: android.location.GnssStatus) {
+                    var used = 0
+                    for (i in 0 until status.satelliteCount) {
+                        if (status.usedInFix(i)) used++
+                    }
+                    lastSatellitesUsed = used
+                    lastSatellitesInView = status.satelliteCount
+                }
+            }
+            gnssCallback = callback
+            manager.registerGnssStatusCallback(callback, Handler(Looper.getMainLooper()))
+        } catch (e: SecurityException) {
+            AppLogger.w(TAG, "GNSS status unavailable: ${e.message}")
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "GNSS status registration failed: ${e.message}")
+        }
+    }
+
+    private fun unregisterGnssStatus() {
+        val callback = gnssCallback ?: return
+        gnssCallback = null
+        try {
+            val manager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+            manager.unregisterGnssStatusCallback(callback)
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "GNSS status unregister failed: ${e.message}")
+        }
     }
 
     /**
@@ -1004,7 +1046,7 @@ class LocationForegroundService : Service() {
             AppLogger.d(TAG, "Location dropped: inside active pause zone '$currentZoneName'")
             // Send position to UI so the map stays current while paused
             val (bat, batStatus) = deviceInfoHelper.getCachedBatteryStatus()
-            LocationServiceModule.sendLocationEvent(location, bat, batStatus)
+            LocationServiceModule.sendLocationEvent(location, bat, batStatus, lastSatellitesUsed, lastSatellitesInView)
             return
         }
         val anchorJob = applyZoneTransition(zone)
@@ -1028,7 +1070,7 @@ class LocationForegroundService : Service() {
                 endpoint = config.endpoint
             )
 
-            LocationServiceModule.sendLocationEvent(location, battery, batteryStatus)
+            LocationServiceModule.sendLocationEvent(location, battery, batteryStatus, lastSatellitesUsed, lastSatellitesInView)
 
             val payload = PayloadBuilder.buildLocationPayload(location, timestampSec, battery, batteryStatus, payloadFieldMap, payloadCustomFields, config.apiFormat)
 
@@ -1380,7 +1422,7 @@ class LocationForegroundService : Service() {
 
         // Emit before queueAndSend: an instant-mode send blocks on the network, and the map
         // should not wait out a timeout to show a point that is already saved.
-        LocationServiceModule.sendLocationEvent(location, battery, batteryStatus)
+        LocationServiceModule.sendLocationEvent(location, battery, batteryStatus, lastSatellitesUsed, lastSatellitesInView)
 
         dbHelper.saveSetting(SettingsKeys.HEARTBEAT_LAST_AT, location.time.toString())
 

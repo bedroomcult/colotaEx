@@ -7,13 +7,14 @@ import React from "react"
 import { ScrollView } from "react-native"
 import { CircleAlert, CircleDashed, CircleDot, CirclePause, Timer, type LucideIcon } from "lucide-react-native"
 import { useTheme } from "../../../hooks/useTheme"
-import { Settings, ThemeColors } from "../../../types/global"
+import { Settings, ThemeColors, type LocationCoords } from "../../../types/global"
 import { describeState, type IntervalLines, type StateIcon, type StateTone } from "../../../utils/dashboardState"
 import { size } from "../../../constants"
 import { MapDock } from "../../ui/MapDock"
 import { Divider } from "../../ui/Divider"
 import { SpinningLoader } from "../../ui/SpinningLoader"
 import { ConnectionStatus } from "./ConnectionStatus"
+import { GpsStatusRow } from "./GpsStatusRow"
 import { StateLine } from "../../ui/StateLine"
 import { WelcomeCard } from "./WelcomeCard"
 
@@ -24,8 +25,8 @@ type DashboardDockProps = {
   activeZoneName: string | null
   pauseReason: string | null
   activeProfileName: string | null
-  coords: { accuracy: number; timestamp: number } | null
-  lastKnown: { timestamp: number } | null
+  coords: LocationCoords | null
+  lastKnown: { accuracy: number; timestamp: number } | null
   stoppedByBattery: boolean
   interval: IntervalLines
   endpoint: string | null
@@ -99,7 +100,7 @@ export function DashboardDock({
     activeZoneName,
     pauseReason,
     activeProfileName,
-    coords,
+    coords: coords ? { accuracy: coords.accuracy ?? 0, timestamp: coords.timestamp ?? 0 } : null,
     lastKnown,
     stoppedByBattery
   })
@@ -115,6 +116,13 @@ export function DashboardDock({
   return (
     <MapDock maxHeight={maxHeight}>
       <StateLine icon={icon} iconColor={iconColor} label={state.label} caption={state.caption} testID="dock-state" />
+      <Divider tight inset />
+      <GpsStatusRow
+        tracking={tracking}
+        coords={coords}
+        lastKnown={lastKnown}
+        intervalSeconds={settings.interval}
+      />
       <Divider tight inset />
       <StateLine
         icon={Timer}

@@ -224,7 +224,7 @@ export function DashboardScreen({ navigation }: ScreenProps) {
   const controlsBottom = space.lg + stackHeight + space.sm
 
   const hasFix = tracking && coords !== null && coords.latitude !== 0 && coords.longitude !== 0
-  const dockCoords = hasFix ? { accuracy: coords.accuracy ?? 0, timestamp: coords.timestamp ?? 0 } : null
+  const dockCoords = hasFix ? coords : null
   const intervalRow = activeProfile
     ? intervalLines(activeProfile.interval, activeProfile.syncInterval, settings.isOfflineMode)
     : intervalLines(settings.interval, settings.syncInterval, settings.isOfflineMode)

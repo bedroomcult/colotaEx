@@ -83,15 +83,16 @@ const renderDock = (props: Partial<React.ComponentProps<typeof DashboardDock>> =
   render(<DashboardDock {...idleProps} {...props} />)
 
 describe("DashboardDock", () => {
-  it("keeps the same three rows and two seams idle and tracking, so starting never shifts the dock", () => {
+  it("keeps the same four rows and three seams idle and tracking, so starting never shifts the dock", () => {
     const idle = renderDock()
     const idleShape = [
       idle.getByTestId("dock-state"),
+      idle.getByTestId("gps-status"),
       idle.getByTestId("dock-interval"),
       idle.getByTestId("ConnectionStatus")
     ].length
-    expect(idleShape).toBe(3)
-    expect(idle.UNSAFE_getAllByType(Divider)).toHaveLength(2)
+    expect(idleShape).toBe(4)
+    expect(idle.UNSAFE_getAllByType(Divider)).toHaveLength(3)
     for (const divider of idle.UNSAFE_getAllByType(Divider)) {
       expect(divider.props.tight).toBe(true)
       expect(divider.props.inset).toBe(true)
@@ -102,9 +103,10 @@ describe("DashboardDock", () => {
 
     const live = renderDock(trackingProps)
     expect(live.getByTestId("dock-state")).toBeTruthy()
+    expect(live.getByTestId("gps-status")).toBeTruthy()
     expect(live.getByTestId("dock-interval")).toBeTruthy()
     expect(live.getByTestId("ConnectionStatus")).toBeTruthy()
-    expect(live.UNSAFE_getAllByType(Divider)).toHaveLength(2)
+    expect(live.UNSAFE_getAllByType(Divider)).toHaveLength(3)
     expect(live.getByText("Tracking")).toBeTruthy()
     expect(live.getByText(/^±4 m · /)).toBeTruthy()
     expect(live.getByTestId("icon-CircleDot").props.color).toBe(lightColors.success)
@@ -114,7 +116,8 @@ describe("DashboardDock", () => {
     const { queryByTestId, UNSAFE_getAllByType, getByTestId } = renderDock({ isOfflineMode: true })
 
     expect(queryByTestId("ConnectionStatus")).toBeNull()
-    expect(UNSAFE_getAllByType(Divider)).toHaveLength(1)
+    expect(UNSAFE_getAllByType(Divider)).toHaveLength(2)
+    expect(getByTestId("gps-status")).toBeTruthy()
     expect(getByTestId("dock-interval")).toBeTruthy()
   })
 

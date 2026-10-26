@@ -31,6 +31,9 @@ export interface LocationCoords {
   bearing?: number
   battery?: number
   battery_status?: number
+  /** Satellites used in the fix / in view, from the GNSS callback. Absent on network-only fixes. */
+  satellitesUsed?: number
+  satellitesInView?: number
   /** Unix epoch seconds */
   timestamp?: number
   /** User-entered free-text note (POI annotation). Local-only, not synced. */
