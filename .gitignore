@@ -77,3 +77,6 @@ apps/docs/static/releases.xml
 
 # Local agent tooling
 /.pi/
+
+# Git worktrees created for side-by-side checkouts
+/.worktrees/
