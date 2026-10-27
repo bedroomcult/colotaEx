@@ -17,6 +17,9 @@ import {
   buildTrackSegmentsGeoJSON,
   buildTrackPointsGeoJSON,
   computeTrackBounds,
+  computeSpeedPercentiles,
+  relativeSpeedColor,
+  getSpeedColor,
   speedRange,
   speedRampColor,
   TRACK_CASING_STYLE,
@@ -58,9 +61,10 @@ interface Props {
   colors: ThemeColors
   trips?: Trip[]
   trackColor: string
-  /** `"speed"` ramps each fix from the trip's slowest to its fastest colour instead of colouring
-   *  by trip. Only meaningful where a single trip is drawn, since it gives up trip identity. */
-  colorMode?: "trip" | "speed"
+  /** `"speed"` colours each fix by the trip's own percentile stops (relative mode);
+   *  `"absolute"` uses fixed 0-12 m/s anchors so trips compare. Only meaningful where a
+   *  single trip is drawn, since both give up trip identity. */
+  colorMode?: "trip" | "speed" | "absolute"
   fitVersion?: number
   /** Notes saved this session, by id. Held by the parent because the tabs unmount this map. */
   noteOverrides?: Record<number, string | undefined>
@@ -214,7 +218,13 @@ export function TrackMap({
 
   // The line, its dots and the selection highlight all read this, so they never disagree
   const locationColors = useMemo(() => {
+    if (colorMode === "absolute") {
+      return locations.map((loc) => getSpeedColor(loc.speed ?? 0))
+    }
     if (colorMode === "speed") {
+      const stops = computeSpeedPercentiles(locations.map((loc) => loc.speed))
+      if (stops) return locations.map((loc) => relativeSpeedColor(loc.speed ?? 0, stops))
+      // Too few or identical moving samples: stable min/max span, no red endpoint.
       const { min, max } = speedRange(locations)
       return locations.map((loc) => speedRampColor(loc.speed ?? 0, min, max))
     }

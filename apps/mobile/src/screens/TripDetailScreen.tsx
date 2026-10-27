@@ -4,11 +4,12 @@
  */
 
 import React, { useMemo, useState, useCallback, useLayoutEffect, useEffect, useRef } from "react"
-import { View, Text, StyleSheet, ScrollView, useWindowDimensions } from "react-native"
+import { View, Text, StyleSheet, ScrollView, Pressable, useWindowDimensions } from "react-native"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
 import { Upload, Trash2, Route, Clock, Gauge, Zap, MapPin, TrendingUp, TrendingDown } from "lucide-react-native"
 import { useTheme } from "../hooks/useTheme"
 import { fontSizes, fonts } from "../styles/typography"
+import { radius } from "@colota/shared"
 // Deep paths on purpose: the components barrel re-exports DashboardMap, which reaches
 // TrackingProvider and builds a NativeEventEmitter at module scope. This screen needs none of it.
 import { Card } from "../components/ui/Card"
@@ -65,6 +66,7 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
   const [noteOverrides, setNoteOverrides] = useState<Record<number, string | undefined>>({})
   const [selectedPointId, setSelectedPointId] = useState<number | null>(null)
   const [showPoints, setShowPoints] = useState(true)
+  const [speedColorMode, setSpeedColorMode] = useState<"relative" | "absolute">("relative")
   const [dockHeight, setDockHeight] = useState(0)
   const [hasEndpoint, setHasEndpoint] = useState(false)
 
@@ -92,6 +94,28 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
     return () => {
       active = false
     }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    NativeLocationService.getSetting("speedColorMode")
+      .then((mode) => {
+        if (active && (mode === "relative" || mode === "absolute")) setSpeedColorMode(mode)
+      })
+      .catch((error) => logger.error("[TripDetail] Speed color mode load failed:", error))
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const handleSelectSpeedColorMode = useCallback((mode: "relative" | "absolute") => {
+    setSpeedColorMode((prev) => {
+      if (prev === mode) return prev
+      NativeLocationService.saveSetting("speedColorMode", mode).catch((error) =>
+        logger.error("[TripDetail] Speed color mode save failed:", error)
+      )
+      return mode
+    })
   }, [])
 
   useEffect(() => {
@@ -311,7 +335,7 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
           locations={trip.locations}
           colors={colors}
           trackColor={tripColor}
-          colorMode="speed"
+          colorMode={speedColorMode === "absolute" ? "absolute" : "speed"}
           fitVersion={trip.index}
           noteOverrides={noteOverrides}
           selectedPointId={selectedPointId}
@@ -325,11 +349,42 @@ export function TripDetailScreen({ route, navigation }: RootScreenProps<"Trip De
           controlsEnd={edgeEnd}
         />
         {speedBounds.max > speedBounds.min && (
-          <SpeedLegend
-            minSpeed={speedBounds.min}
-            maxSpeed={speedBounds.max}
-            style={[styles.legend, { top: space.lg, left: edgeStart }]}
-          />
+          <View style={[styles.legend, { top: space.lg, left: edgeStart }]}>
+            <SpeedLegend
+              minSpeed={speedBounds.min}
+              maxSpeed={speedBounds.max}
+              speeds={trip.locations.map((loc) => loc.speed)}
+              mode={speedColorMode}
+            />
+            <View
+              style={[styles.modeToggle, { backgroundColor: colors.card, borderColor: colors.border }]}
+              accessibilityRole="tablist"
+            >
+              {(["relative", "absolute"] as const).map((mode) => {
+                const active = speedColorMode === mode
+                return (
+                  <Pressable
+                    key={mode}
+                    onPress={() => handleSelectSpeedColorMode(mode)}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={t(`tripDetail.speedMode.${mode}`)}
+                    testID={`speed-mode-${mode}`}
+                    style={styles.modeOption}
+                  >
+                    <Text
+                      style={[
+                        styles.modeLabel,
+                        { color: active ? colors.primary : colors.textSecondary }
+                      ]}
+                    >
+                      {t(`tripDetail.speedMode.${mode}`)}
+                    </Text>
+                  </Pressable>
+                )
+              })}
+            </View>
+          </View>
         )}
         {selectedPoint && selectedPointId != null && (
           <InspectorDock
@@ -472,7 +527,25 @@ const styles = StyleSheet.create({
   },
 
   legend: {
-    position: "absolute"
+    position: "absolute",
+    gap: space.xs
+  },
+  modeToggle: {
+    flexDirection: "row",
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    overflow: "hidden"
+  },
+  modeOption: {
+    flex: 1,
+    paddingVertical: space.xxs,
+    paddingHorizontal: space.sm,
+    alignItems: "center"
+  },
+  modeLabel: {
+    fontSize: fontSizes.micro,
+    ...fonts.regular,
+    fontVariant: ["tabular-nums"]
   },
   chartCard: {
     padding: space.md

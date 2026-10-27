@@ -1,7 +1,6 @@
 import React from "react"
 import { render, act, fireEvent, within } from "@testing-library/react-native"
 import { TrackMap, POINT_HITBOX } from "../TrackMap"
-import { rampColor } from "../../map/mapUtils"
 import { DEFAULT_MAP_ZOOM, MAP_ANIMATION_DURATION_MS, size } from "../../../../constants"
 import type { Trip } from "../../../../types/global"
 
@@ -620,25 +619,49 @@ describe("TrackMap speed ramp", () => {
   const RAMP = ["#2E9E4F", "#E8C547", "#E8813A", "#D93A3A"]
   const locations = [
     { ...loc(52.5, 13.4), id: 1, speed: 0 },
-    { ...loc(52.55, 13.45), id: 2, speed: 6 },
-    { ...loc(52.6, 13.5), id: 3, speed: 12 }
+    { ...loc(52.52, 13.42), id: 2, speed: 2 },
+    { ...loc(52.55, 13.45), id: 3, speed: 6 },
+    { ...loc(52.6, 13.5), id: 4, speed: 12 }
   ]
   const drawnColors = () => mockBuildPoints.mock.calls.at(-1)![2] as string[]
 
-  it("ramps from the trip's slowest fix to a red at its fastest", () => {
+  it("ramps from green at the slowest fix to red at the fastest", () => {
     renderMap({ locations, colors: rampColors, colorMode: "speed" })
 
-    expect(drawnColors()).toEqual([RAMP[0], expect.any(String), RAMP[3]])
+    expect(drawnColors()).toEqual([RAMP[0], expect.any(String), expect.any(String), RAMP[3]])
   })
 
-  it("passes through yellow and orange, so the middle speed is neither green nor red", () => {
+  it("passes through yellow and orange, so middle speeds are neither green nor red", () => {
     renderMap({ locations, colors: rampColors, colorMode: "speed" })
 
-    const middle = drawnColors()[1]
-    expect(middle).not.toBe(RAMP[0])
-    expect(middle).not.toBe(RAMP[3])
-    // The middle fix sits on the orange band of the four-stop ramp.
-    expect(middle).toBe(rampColor(0.5))
+    const [, second, third] = drawnColors()
+    for (const middle of [second, third]) {
+      expect(middle).not.toBe(RAMP[0])
+      expect(middle).not.toBe(RAMP[3])
+    }
+  })
+
+  it("falls back to a stable span with too few moving samples, without crashing", () => {
+    renderMap({
+      locations: [
+        { ...loc(52.5, 13.4), id: 1, speed: 0 },
+        { ...loc(52.6, 13.5), id: 2, speed: 6 }
+      ],
+      colors: rampColors,
+      colorMode: "speed"
+    })
+
+    expect(drawnColors()).toEqual([RAMP[0], RAMP[3]])
+  })
+
+  it("maps the same speed to the same colour in absolute mode across trips", () => {
+    renderMap({ locations, colors: rampColors, colorMode: "absolute" })
+
+    // 0 green, 12 red, the middle two interpolated on fixed 0-12 anchors.
+    expect(drawnColors()).toEqual([RAMP[0], expect.any(String), expect.any(String), RAMP[3]])
+    const [, second] = drawnColors()
+    expect(second).not.toBe(RAMP[0])
+    expect(second).not.toBe(RAMP[3])
   })
 
   it("colours the dots off the same ramp as the line, so a point never contradicts its segment", () => {

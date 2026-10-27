@@ -48,8 +48,14 @@ export function lerpColor(c1: string, c2: string, t: number): string {
 const SPEED_RAMP_STOPS = ["#2E9E4F", "#E8C547", "#E8813A", "#D93A3A"] as const
 
 /** Absolute speeds the ramp spans: below the first is green, above the last is red. */
-const SPEED_RAMP_MIN_MPS = 2
-const SPEED_RAMP_MAX_MPS = 8
+const SPEED_RAMP_MIN_MPS = 0
+export const ABSOLUTE_RAMP_MAX_MPS = 12
+
+/** At or below this a fix reads as stopped: green, and excluded from percentile math. */
+export const NEAR_STATIONARY_MPS = 3 / 3.6
+
+/** Implausible GPS spikes never anchor the scale; matches the service's jitter reject. */
+const MAX_PLAUSIBLE_MPS = 278
 
 /** Interpolates along the four-stop speed ramp; t is 0 (slowest) to 1 (fastest). */
 export function rampColor(t: number): string {
@@ -65,13 +71,92 @@ export function rampColor(t: number): string {
 }
 
 /**
- * Returns a color for a given speed (m/s) on the same green-yellow-orange-red ramp the trip
- * gradient uses, so a point and its segment never disagree. Below 2 m/s green, above 8 m/s red.
+ * Returns a color for a given speed (m/s) on fixed absolute anchors, so the same speed reads
+ * the same colour in every trip. Below 0 green, above 12 m/s red.
  */
 export function getSpeedColor(speed: number): string {
-  if (speed <= SPEED_RAMP_MIN_MPS) return SPEED_RAMP_STOPS[0]
-  if (speed >= SPEED_RAMP_MAX_MPS) return SPEED_RAMP_STOPS[SPEED_RAMP_STOPS.length - 1]
-  return rampColor((speed - SPEED_RAMP_MIN_MPS) / (SPEED_RAMP_MAX_MPS - SPEED_RAMP_MIN_MPS))
+  if (!(speed >= 0) || speed <= SPEED_RAMP_MIN_MPS) return SPEED_RAMP_STOPS[0]
+  if (speed >= ABSOLUTE_RAMP_MAX_MPS) return SPEED_RAMP_STOPS[SPEED_RAMP_STOPS.length - 1]
+  return rampColor((speed - SPEED_RAMP_MIN_MPS) / (ABSOLUTE_RAMP_MAX_MPS - SPEED_RAMP_MIN_MPS))
+}
+
+/** A speed sample is usable when it is finite, non-negative and plausible. */
+export function isValidSpeed(speed: number | undefined | null): speed is number {
+  return (
+    typeof speed === "number" && Number.isFinite(speed) && speed >= 0 && speed <= MAX_PLAUSIBLE_MPS
+  )
+}
+
+export interface SpeedPercentileStops {
+  p10: number
+  p30: number
+  p50: number
+  p70: number
+  p90: number
+  max: number
+}
+
+function percentile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0
+  if (sorted.length === 1) return sorted[0]
+  const rank = (q / 100) * (sorted.length - 1)
+  const lower = Math.floor(rank)
+  const upper = Math.ceil(rank)
+  if (lower === upper) return sorted[lower]
+  return sorted[lower] + (sorted[upper] - sorted[lower]) * (rank - lower)
+}
+
+/**
+ * Percentile stops from a trip's moving speeds, slowest to fastest. Stops (at or below
+ * 3 km/h) and invalid samples are excluded so long rests and GPS spikes never anchor the
+ * scale. Returns null when fewer than 3 moving samples exist or they all read the same,
+ * in which case the caller falls back to a stable min/max span.
+ */
+export function computeSpeedPercentiles(speeds: ArrayLike<number | undefined | null>): SpeedPercentileStops | null {
+  const moving: number[] = []
+  for (let i = 0; i < speeds.length; i++) {
+    const speed = speeds[i]
+    if (isValidSpeed(speed) && speed > NEAR_STATIONARY_MPS) moving.push(speed)
+  }
+  if (moving.length < 3) return null
+  moving.sort((a, b) => a - b)
+  if (moving[0] === moving[moving.length - 1]) return null
+  return {
+    p10: percentile(moving, 10),
+    p30: percentile(moving, 30),
+    p50: percentile(moving, 50),
+    p70: percentile(moving, 70),
+    p90: percentile(moving, 90),
+    max: moving[moving.length - 1]
+  }
+}
+
+/** The seven percentile stops interpolated across the four ramp colours. */
+const RELATIVE_STOP_T = [0, 0.2, 0.4, 0.6, 0.8, 0.9, 1] as const
+
+function relativeStopColor(index: number, fraction: number): string {
+  const t = RELATIVE_STOP_T[index] + fraction * (RELATIVE_STOP_T[index + 1] - RELATIVE_STOP_T[index])
+  return rampColor(t)
+}
+
+/**
+ * Colour along the trip's own percentile stops: p10 green, p50 yellow, p90 orange-red,
+ * max red, smooth between. Stops and anything slower read green. Falls back to green.
+ * Deterministic: same speed and stops always yield the same colour.
+ */
+export function relativeSpeedColor(speed: number, stops: SpeedPercentileStops): string {
+  if (!isValidSpeed(speed) || speed <= NEAR_STATIONARY_MPS || speed <= stops.p10)
+    return SPEED_RAMP_STOPS[0]
+  if (speed >= stops.max) return SPEED_RAMP_STOPS[SPEED_RAMP_STOPS.length - 1]
+  const bounds = [stops.p10, stops.p30, stops.p50, stops.p70, stops.p90, stops.max]
+  for (let i = 0; i < bounds.length - 1; i++) {
+    if (speed <= bounds[i + 1]) {
+      const span = bounds[i + 1] - bounds[i]
+      const fraction = span > 0 ? (speed - bounds[i]) / span : 0
+      return relativeStopColor(i, Math.max(0, Math.min(1, fraction)))
+    }
+  }
+  return SPEED_RAMP_STOPS[SPEED_RAMP_STOPS.length - 1]
 }
 
 /**
@@ -90,9 +175,9 @@ export function speedRange(locations: ArrayLike<{ speed?: number }>): { min: num
 }
 
 /**
- * Colour along a ramp scaled to this trip's own range rather than absolute thresholds, so a walk
- * and a drive both show contrast. Green at the slowest fix, red at the fastest, with yellow and
- * orange in between.
+ * Colour along a ramp scaled to this trip's own min/max. Kept for the day map and other
+ * callers without a percentile context. For trip display prefer percentile stops via
+ * {@link computeSpeedPercentiles} + {@link relativeSpeedColor}.
  */
 export function speedRampColor(speed: number, min: number, max: number): string {
   if (!(max > min) || speed <= min) return SPEED_RAMP_STOPS[0]

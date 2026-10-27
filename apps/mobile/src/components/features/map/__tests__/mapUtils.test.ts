@@ -1,6 +1,11 @@
 import {
   lerpColor,
+  rampColor,
   getSpeedColor,
+  computeSpeedPercentiles,
+  relativeSpeedColor,
+  isValidSpeed,
+  NEAR_STATIONARY_MPS,
   speedRange,
   speedRampColor,
   createCirclePolygon,
@@ -54,21 +59,21 @@ describe("lerpColor", () => {
 // ============================================================================
 
 describe("getSpeedColor", () => {
-  it("returns green for speed <= 2 m/s", () => {
+  it("returns green at standstill and red at 12 m/s and above", () => {
     expect(getSpeedColor(0)).toBe(RAMP[0])
-    expect(getSpeedColor(1)).toBe(RAMP[0])
-    expect(getSpeedColor(2)).toBe(RAMP[0])
+    expect(getSpeedColor(12)).toBe(RAMP[3])
+    expect(getSpeedColor(30)).toBe(RAMP[3])
   })
 
-  it("returns red for speed >= 8 m/s", () => {
-    expect(getSpeedColor(8)).toBe(RAMP[3])
-    expect(getSpeedColor(15)).toBe(RAMP[3])
-  })
-
-  it("walks the ramp through yellow and orange between the ends", () => {
-    // 4 m/s is a third of the 2-8 m/s span, so it lands on yellow.
+  it("walks the ramp through yellow and orange between the anchors", () => {
+    // A third of the 0-12 m/s span lands on yellow, two thirds on orange.
     expect(getSpeedColor(4)).toBe(RAMP[1])
-    expect(getSpeedColor(6)).toBe(RAMP[2])
+    expect(getSpeedColor(8)).toBe(RAMP[2])
+  })
+
+  it("maps the same speed to the same colour in every trip", () => {
+    expect(getSpeedColor(6)).toBe(getSpeedColor(6))
+    expect(getSpeedColor(6)).toBe("rgb(232,166,62)")
   })
 
   it("keeps the four stops distinct, so no two speeds share a colour", () => {
@@ -98,6 +103,90 @@ describe("speedRange", () => {
 // ============================================================================
 // speedRampColor
 // ============================================================================
+
+describe("isValidSpeed", () => {
+  it("rejects missing, negative, NaN and absurd spikes", () => {
+    expect(isValidSpeed(undefined)).toBe(false)
+    expect(isValidSpeed(null)).toBe(false)
+    expect(isValidSpeed(NaN)).toBe(false)
+    expect(isValidSpeed(-1)).toBe(false)
+    expect(isValidSpeed(279)).toBe(false)
+    expect(isValidSpeed(Infinity)).toBe(false)
+  })
+
+  it("accepts still through the jitter cap", () => {
+    expect(isValidSpeed(0)).toBe(true)
+    expect(isValidSpeed(278)).toBe(true)
+  })
+})
+
+describe("computeSpeedPercentiles", () => {
+  // 1..10 m/s: p10 ~1.9, p30 ~3.7, p50 ~5.5, p70 ~7.3, p90 ~9.1, max 10
+  const speeds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+  it("computes percentile stops from moving speeds", () => {
+    const stops = computeSpeedPercentiles(speeds)!
+    expect(stops).not.toBeNull()
+    expect(stops.p10).toBeCloseTo(1.9, 6)
+    expect(stops.p30).toBeCloseTo(3.7, 6)
+    expect(stops.p50).toBeCloseTo(5.5, 6)
+    expect(stops.p70).toBeCloseTo(7.3, 6)
+    expect(stops.p90).toBeCloseTo(9.1, 6)
+    expect(stops.max).toBe(10)
+  })
+
+  it("excludes stops and invalid samples from the distribution", () => {
+    const stops = computeSpeedPercentiles([0, 0.5, NaN, -2, 400, ...speeds])!
+    expect(stops!.p50).toBeCloseTo(5.5, 6)
+    expect(stops!.max).toBe(10)
+  })
+
+  it("excludes the near-stationary threshold itself", () => {
+    expect(
+      computeSpeedPercentiles([NEAR_STATIONARY_MPS, NEAR_STATIONARY_MPS, NEAR_STATIONARY_MPS, 5, 6, 7])
+    ).not.toBeNull()
+    const stops = computeSpeedPercentiles([NEAR_STATIONARY_MPS, 5, 6, 7, 8, 9])!
+    expect(stops.p10).toBeGreaterThan(NEAR_STATIONARY_MPS)
+  })
+
+  it("returns null with fewer than 3 moving samples", () => {
+    expect(computeSpeedPercentiles([])).toBeNull()
+    expect(computeSpeedPercentiles([0, 5])).toBeNull()
+    expect(computeSpeedPercentiles([0, 0, 0])).toBeNull()
+  })
+
+  it("returns null when every moving sample reads the same", () => {
+    expect(computeSpeedPercentiles([5, 5, 5, 5])).toBeNull()
+  })
+})
+
+describe("relativeSpeedColor", () => {
+  const stops = computeSpeedPercentiles([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])!
+
+  it("reads stops and slower as green, the max as red", () => {
+    expect(relativeSpeedColor(0.5, stops)).toBe(RAMP[0])
+    expect(relativeSpeedColor(stops.p10, stops)).toBe(RAMP[0])
+    expect(relativeSpeedColor(stops.max, stops)).toBe(RAMP[3])
+    expect(relativeSpeedColor(50, stops)).toBe(RAMP[3])
+  })
+
+  it("interpolates smoothly between stops without banding", () => {
+    const mid = relativeSpeedColor((stops.p30 + stops.p50) / 2, stops)
+    expect(mid).toMatch(/^rgb\(\d+,\d+,\d+\)$/)
+    expect(mid).not.toBe(RAMP[0])
+    expect(mid).not.toBe(RAMP[3])
+  })
+
+  it("is deterministic for the same speed and stops", () => {
+    expect(relativeSpeedColor(4.2, stops)).toBe(relativeSpeedColor(4.2, stops))
+  })
+
+  it("maps the p50 band to yellow and p70 to orange", () => {
+    // p50 sits 40% along the ramp (yellow side), p70 at 60% (orange side).
+    expect(relativeSpeedColor(stops.p50, stops)).toBe(rampColor(0.4))
+    expect(relativeSpeedColor(stops.p70, stops)).toBe(rampColor(0.6))
+  })
+})
 
 describe("speedRampColor", () => {
   it("is green at the slowest fix and red at the fastest, whatever the trip's own speeds are", () => {

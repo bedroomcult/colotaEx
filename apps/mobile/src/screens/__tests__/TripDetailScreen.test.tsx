@@ -10,6 +10,7 @@ jest.mock("../../services/NativeLocationService", () => ({
     deleteLocationsInRange: jest.fn().mockResolvedValue(0),
     updateLocationNote: jest.fn().mockResolvedValue(undefined),
     getSetting: jest.fn().mockResolvedValue(""),
+    saveSetting: jest.fn().mockResolvedValue(undefined),
     exportTripsToFile: jest.fn().mockResolvedValue("/tmp/export"),
     shareFile: jest.fn()
   }
@@ -404,13 +405,44 @@ describe("TripDetailScreen - max speed and the speed ramp", () => {
     expect(labels[1]).toMatch(/^Max speed, 43[.,]2 km\/h$/)
   })
 
-  it("names both ends of the ramp the map draws, so the reds are readable", async () => {
+  it("names all three stops of the ramp the map draws, so the reds are readable", async () => {
     const { getByTestId } = render(<TripDetailScreen {...makeProps(withSpeeds([0, 6, 12]))} />)
     await act(async () => {})
 
     expect(getByTestId("speed-legend").props.accessibilityLabel).toMatch(
-      /^Speed gradient from 0[.,]0 km\/h to 43[.,]2 km\/h$/
+      /^Speed gradient from 0[.,]0 km\/h to 43[.,]2 km\/h, midpoint .+ \(Relative to this trip\)$/
     )
+  })
+
+  it("offers the absolute scale beside relative, persists the choice and hands it to the map", async () => {
+    const props = makeProps(withSpeeds([0, 6, 12]))
+    const { getByTestId, getByLabelText } = render(<TripDetailScreen {...props} />)
+    await act(async () => {})
+    // The mocked map hides the TrackMap props, so read the legend and the toggle instead.
+    expect(getByTestId("speed-mode-relative")).toBeTruthy()
+    expect(getByTestId("speed-mode-absolute")).toBeTruthy()
+    expect(getByTestId("speed-legend").props.accessibilityLabel).toContain("(Relative to this trip)")
+
+    fireEvent.press(getByTestId("speed-mode-absolute"))
+    await waitFor(() =>
+      expect(NativeLocationService.saveSetting).toHaveBeenCalledWith("speedColorMode", "absolute")
+    )
+    expect(getByTestId("speed-legend").props.accessibilityLabel).toContain("(Absolute)")
+
+    fireEvent.press(getByLabelText("Relative"))
+    await waitFor(() =>
+      expect(NativeLocationService.saveSetting).toHaveBeenCalledWith("speedColorMode", "relative")
+    )
+  })
+
+  it("restores the persisted color mode on open", async () => {
+    ;(NativeLocationService.getSetting as jest.Mock).mockImplementation((key: string) =>
+      Promise.resolve(key === "speedColorMode" ? "absolute" : "")
+    )
+    const { getByTestId } = render(<TripDetailScreen {...makeProps(withSpeeds([0, 6, 12]))} />)
+    await act(async () => {})
+
+    expect(getByTestId("speed-legend").props.accessibilityLabel).toContain("(Absolute)")
   })
 
   it("leaves the legend off a trip whose fixes carry no speed, where one colour says nothing", async () => {
