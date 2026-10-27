@@ -101,6 +101,8 @@ class LocationForegroundServiceTest {
         every { PayloadBuilder.parseCustomFields(any()) } returns null
         every { syncManager.getCachedQueuedCount() } returns 0
         every { syncManager.lastSuccessfulSyncTime } returns 0L
+        // The notification reads today's point count, so the DB must answer with real numbers.
+        every { dbHelper.getStats() } returns DatabaseHelper.Stats(0, 0, 0, 0)
         every { profileManager.getActiveProfileName() } returns null
         every { profileManager.defaultInterval } returns 5000L
         every { secureStorage.getAuthHeaders() } returns emptyMap()
@@ -209,6 +211,7 @@ class LocationForegroundServiceTest {
         lat: Double = 52.52,
         lon: Double = 13.405,
         accuracy: Float = 10f,
+        hasAccuracy: Boolean = true,
         altitude: Double = 50.0,
         hasAltitude: Boolean = true,
         speed: Float = 5f,
@@ -222,6 +225,7 @@ class LocationForegroundServiceTest {
         every { latitude } returns lat
         every { longitude } returns lon
         every { this@mockk.accuracy } returns accuracy
+        every { this@mockk.hasAccuracy() } returns hasAccuracy
         every { this@mockk.altitude } returns altitude
         every { hasAltitude() } returns hasAltitude
         every { this@mockk.speed } returns speed

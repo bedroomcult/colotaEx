@@ -217,8 +217,8 @@ class NotificationHelperTest {
         fun `the foreground notification carries the same facts as an update`() {
             val n = helper.buildForegroundNotification(input(isStationary = true, hasFix = true, queuedCount = 3))
 
-            assertEquals("Tracking · Stationary · 3 queued", n.extras.getString(Notification.EXTRA_TEXT))
-            assertEquals("Stationary · 3 queued", n.extras.getString(Notification.EXTRA_BIG_TEXT))
+            assertEquals("Tracking · Stationary · – · – · 0 pts today · 3 queued", n.extras.getString(Notification.EXTRA_TEXT))
+            assertEquals("Stationary · – · – · 0 pts today · 3 queued", n.extras.getString(Notification.EXTRA_BIG_TEXT))
         }
     }
 
@@ -412,9 +412,9 @@ class NotificationHelperTest {
 
     @Test
     fun `metre jitter inside one metre does not re-post`() {
-        val s = input(hasFix = true, accuracyM = 10.4f)
+        val s = input(hasFix = true, accuracyM = 10.1f)
         helper.update(s)
-        assertFalse(helper.update(s.copy(accuracyM = 10.6f)))
+        assertFalse(helper.update(s.copy(accuracyM = 10.4f)))
     }
 
     @Test
