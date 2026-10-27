@@ -27,6 +27,13 @@
     <string name="status_pause_zone">Inside zone · resumes when you leave</string>
     <string name="status_offline">Offline mode</string>
     <string name="status_all_sent">All sent</string>
+    <string name="status_accuracy">±%d m</string>
+    <string name="status_sats">%1$d/%2$s sats</string>
+    <string name="status_unknown">–</string>
+    <plurals name="status_points_today">
+        <item quantity="one">%d pt today</item>
+        <item quantity="other">%d pts today</item>
+    </plurals>
     <plurals name="status_queued">
         <item quantity="one">%d queued</item>
         <item quantity="other">%d queued</item>

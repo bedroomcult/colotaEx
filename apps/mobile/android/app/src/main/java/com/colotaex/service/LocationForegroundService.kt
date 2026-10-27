@@ -30,6 +30,7 @@ import com.colotaex.sync.PayloadBuilder
 import com.colotaex.sync.SyncManager
 import com.colotaex.util.DeviceInfoHelper
 import com.colotaex.util.SecureStorageHelper
+import com.colotaex.util.TimedCache
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.*
@@ -78,6 +79,15 @@ class LocationForegroundService : Service() {
     @Volatile private var lastSatellitesUsed: Int? = null
     @Volatile private var lastSatellitesInView: Int? = null
     private var gnssCallback: android.location.GnssStatus.Callback? = null
+    // Today's point count, re-queried at most once a minute: a fix lands far more often.
+    private val todayPointsCache = TimedCache(60_000L) {
+        try {
+            dbHelper.getStats().today
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "Today's point count unavailable: ${e.message}")
+            0
+        }
+    }
 
     // Rate-limit the fresh-fix probe so repeated rechecks/resumes don't spin up GNSS. Main-thread only.
     @Volatile private var lastFreshProbeAtMs: Long? = null
@@ -1502,17 +1512,22 @@ class LocationForegroundService : Service() {
 
     private fun statusInput(): NotificationHelper.StatusInput {
         val offline = ::config.isInitialized && config.isOfflineMode
+        val fix = lastKnownLocation
         return NotificationHelper.StatusInput(
             locationEnabled = deviceInfoHelper.isLocationEnabled(),
             isPaused = insidePauseZone,
             isWifiPaused = isWifiPaused,
             isMotionlessPaused = isMotionlessPaused,
             isStationary = ::profileManager.isInitialized && profileManager.isStationary,
-            hasFix = lastKnownLocation != null,
+            hasFix = fix != null,
             lastFixMs = lastFixEpochMs.takeIf { it > 0L } ?: startedAtMs,
             isOfflineMode = offline,
             queuedCount = if (offline) 0 else syncManager.getCachedQueuedCount(),
-            lastSyncTime = if (offline) 0L else syncManager.lastSuccessfulSyncTime
+            lastSyncTime = if (offline) 0L else syncManager.lastSuccessfulSyncTime,
+            accuracyM = fix?.takeIf { it.hasAccuracy() }?.accuracy,
+            satellitesUsed = lastSatellitesUsed,
+            satellitesInView = lastSatellitesInView,
+            todayPoints = todayPointsCache.get()
         )
     }
 

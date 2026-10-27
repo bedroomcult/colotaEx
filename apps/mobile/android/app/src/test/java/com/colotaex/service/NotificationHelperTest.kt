@@ -232,27 +232,66 @@ class NotificationHelperTest {
 
     // --- buildStatus ---
 
+    private val noGps = "– · – · 0 pts today"
+
     @Test
     fun `a fix reads Tracking with the sending state and nothing about where it was`() {
-        assertEquals(NotificationHelper.Status("Tracking", "All sent"), status(input(hasFix = true)))
+        assertEquals(
+            NotificationHelper.Status("Tracking", "$noGps · All sent"),
+            status(input(hasFix = true))
+        )
+    }
+
+    @Test
+    fun `a live fix shows accuracy, sats and today's count`() {
+        assertEquals(
+            "±12 m · 8/14 sats · 42 pts today · All sent",
+            status(
+                input(
+                    hasFix = true,
+                    accuracyM = 12.4f,
+                    satellitesUsed = 8,
+                    satellitesInView = 14,
+                    todayPoints = 42
+                )
+            ).text
+        )
+    }
+
+    @Test
+    fun `one point today reads singular`() {
+        assertEquals(
+            "±12 m · 8/14 sats · 1 pt today · All sent",
+            status(
+                input(hasFix = true, accuracyM = 12f, satellitesUsed = 8, satellitesInView = 14, todayPoints = 1)
+            ).text
+        )
+    }
+
+    @Test
+    fun `missing sats render a dash but keep accuracy`() {
+        assertEquals(
+            "±12 m · – · 3 pts today · All sent",
+            status(input(hasFix = true, accuracyM = 12f, todayPoints = 3)).text
+        )
     }
 
     @Test
     fun `a backed-up queue after a sync this run prints depth and age`() {
         assertEquals(
-            "12 queued · last sync 3 min ago",
+            "$noGps · 12 queued · last sync 3 min ago",
             status(input(hasFix = true, queuedCount = 12, lastSyncTime = NOW - 180_000L)).text
         )
     }
 
     @Test
     fun `a backed-up queue with no sync this run prints the depth alone`() {
-        assertEquals("12 queued", status(input(hasFix = true, queuedCount = 12)).text)
+        assertEquals("$noGps · 12 queued", status(input(hasFix = true, queuedCount = 12)).text)
     }
 
     @Test
     fun `a single queued point reads 1 queued`() {
-        assertEquals("1 queued", status(input(hasFix = true, queuedCount = 1)).text)
+        assertEquals("$noGps · 1 queued", status(input(hasFix = true, queuedCount = 1)).text)
     }
 
     // The worker passes the count twice, once to pick the form and once to print it, then the file name.
@@ -265,27 +304,27 @@ class NotificationHelperTest {
 
     @Test
     fun `an empty queue reads All sent regardless of the last sync time`() {
-        assertEquals("All sent", status(input(hasFix = true, lastSyncTime = 0L)).text)
-        assertEquals("All sent", status(input(hasFix = true, lastSyncTime = NOW - 60_000L)).text)
+        assertEquals("$noGps · All sent", status(input(hasFix = true, lastSyncTime = 0L)).text)
+        assertEquals("$noGps · All sent", status(input(hasFix = true, lastSyncTime = NOW - 60_000L)).text)
     }
 
     @Test
     fun `offline mode replaces every queue fact`() {
         assertEquals(
-            "Offline mode",
+            "$noGps · Offline mode",
             status(input(hasFix = true, isOfflineMode = true, queuedCount = 12, lastSyncTime = NOW - 60_000L)).text
         )
     }
 
     @Test
     fun `no fix reads Searching for GPS over the sending state`() {
-        assertEquals(NotificationHelper.Status("Searching for GPS", "3 queued"), status(input(hasFix = false, queuedCount = 3)))
+        assertEquals(NotificationHelper.Status("Searching for GPS", "$noGps · 3 queued"), status(input(hasFix = false, queuedCount = 3)))
     }
 
     @Test
     fun `location services off takes precedence over pause and stationary`() {
         assertEquals(
-            NotificationHelper.Status("Location services are off", "Not recording · All sent"),
+            NotificationHelper.Status("Location services are off", "Not recording · $noGps · All sent"),
             status(input(locationEnabled = false, isPaused = true, isStationary = true, hasFix = true))
         )
     }
@@ -293,7 +332,7 @@ class NotificationHelperTest {
     @Test
     fun `a zone pause shows how it resumes without the zone name`() {
         assertEquals(
-            NotificationHelper.Status("Paused", "Inside zone · resumes when you leave · All sent"),
+            NotificationHelper.Status("Paused", "Inside zone · resumes when you leave · $noGps · All sent"),
             status(input(isPaused = true, hasFix = true))
         )
     }
@@ -301,7 +340,7 @@ class NotificationHelperTest {
     @Test
     fun `a WiFi hold names the WiFi as the reason`() {
         assertEquals(
-            "Zone WiFi · resumes when you leave · All sent",
+            "Zone WiFi · resumes when you leave · $noGps · All sent",
             status(input(isPaused = true, isWifiPaused = true, hasFix = true)).text
         )
     }
@@ -309,7 +348,7 @@ class NotificationHelperTest {
     @Test
     fun `a motionless hold names movement as the release`() {
         assertEquals(
-            "No movement · resumes when you move · All sent",
+            "No movement · resumes when you move · $noGps · All sent",
             status(input(isPaused = true, isMotionlessPaused = true, hasFix = true)).text
         )
     }
@@ -317,7 +356,7 @@ class NotificationHelperTest {
     @Test
     fun `WiFi wins over motionless when both hold`() {
         assertEquals(
-            "Zone WiFi · resumes when you leave · All sent",
+            "Zone WiFi · resumes when you leave · $noGps · All sent",
             status(input(isPaused = true, isWifiPaused = true, isMotionlessPaused = true, hasFix = true)).text
         )
     }
@@ -325,7 +364,7 @@ class NotificationHelperTest {
     @Test
     fun `a pause keeps the queue visible`() {
         assertEquals(
-            "Inside zone · resumes when you leave · 5 queued · last sync just now",
+            "Inside zone · resumes when you leave · $noGps · 5 queued · last sync just now",
             status(input(isPaused = true, hasFix = true, queuedCount = 5, lastSyncTime = NOW - 30_000L)).text
         )
     }
@@ -338,7 +377,7 @@ class NotificationHelperTest {
     @Test
     fun `stationary keeps the Tracking title and prefixes Stationary`() {
         assertEquals(
-            NotificationHelper.Status("Tracking", "Stationary · All sent"),
+            NotificationHelper.Status("Tracking", "Stationary · $noGps · All sent"),
             status(input(isStationary = true, hasFix = true))
         )
     }
@@ -346,9 +385,38 @@ class NotificationHelperTest {
     @Test
     fun `stationary keeps the queue visible`() {
         assertEquals(
-            "Stationary · 3 queued · last sync 1 h ago",
+            "Stationary · $noGps · 3 queued · last sync 1 h ago",
             status(input(isStationary = true, hasFix = true, queuedCount = 3, lastSyncTime = NOW - 3_600_000L)).text
         )
+    }
+
+    @Test
+    fun `a satellite count without a total still prints`() {
+        assertEquals(
+            "±12 m · 8/– sats · 0 pts today · All sent",
+            status(input(hasFix = true, accuracyM = 12f, satellitesUsed = 8)).text
+        )
+    }
+
+    @Test
+    fun `a new satellite count re-posts even in the same minute`() {
+        val s = input(hasFix = true, accuracyM = 10f)
+        helper.update(s)
+        assertTrue(helper.update(s.copy(satellitesUsed = 5, satellitesInView = 9)))
+    }
+
+    @Test
+    fun `metre jitter inside one metre does not re-post`() {
+        val s = input(hasFix = true, accuracyM = 10.4f)
+        helper.update(s)
+        assertFalse(helper.update(s.copy(accuracyM = 10.6f)))
+    }
+
+    @Test
+    fun `a new point today re-posts`() {
+        val s = input(hasFix = true, todayPoints = 41)
+        helper.update(s)
+        assertTrue(helper.update(s.copy(todayPoints = 42)))
     }
 
     // --- formatTimeSinceSync ---

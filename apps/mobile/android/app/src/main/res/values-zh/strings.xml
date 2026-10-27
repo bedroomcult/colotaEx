@@ -27,6 +27,13 @@
     <string name="status_pause_zone">位于区域内 · 离开后恢复</string>
     <string name="status_offline">离线模式</string>
     <string name="status_all_sent">已全部发送</string>
+    <string name="status_accuracy">±%d 米</string>
+    <string name="status_sats">%1$d/%2$s 卫星</string>
+    <string name="status_unknown">–</string>
+    <plurals name="status_points_today">
+        <item quantity="one">今日 %d 个点</item>
+        <item quantity="other">今日 %d 个点</item>
+    </plurals>
     <plurals name="status_queued">
         <item quantity="one">队列中有 %d 项</item>
         <item quantity="other">队列中有 %d 项</item>

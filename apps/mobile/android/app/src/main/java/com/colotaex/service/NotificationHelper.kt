@@ -36,7 +36,11 @@ class NotificationHelper(
         val lastFixMs: Long,
         val isOfflineMode: Boolean = false,
         val queuedCount: Int = 0,
-        val lastSyncTime: Long = 0L
+        val lastSyncTime: Long = 0L,
+        val accuracyM: Float? = null,
+        val satellitesUsed: Int? = null,
+        val satellitesInView: Int? = null,
+        val todayPoints: Int = 0
     )
 
     data class Status(val title: String, val text: String)
@@ -157,14 +161,29 @@ class NotificationHelper(
     /** Title is the recording state, text the sending state. */
     fun buildStatus(input: StatusInput, now: Long = System.currentTimeMillis()): Status {
         val send = sendSegment(input, now)
+        val gps = gpsSegment(input)
         val tracking = str(R.string.status_tracking)
         return when {
-            !input.locationEnabled -> Status(str(R.string.status_location_off), "${str(R.string.status_not_recording)} · $send")
-            input.isPaused -> Status(str(R.string.status_paused), "${pauseDetail(input)} · $send")
-            !input.hasFix -> Status(str(R.string.status_searching), send)
-            input.isStationary -> Status(tracking, "${str(R.string.status_stationary)} · $send")
-            else -> Status(tracking, send)
+            !input.locationEnabled -> Status(str(R.string.status_location_off), "${str(R.string.status_not_recording)} · $gps · $send")
+            input.isPaused -> Status(str(R.string.status_paused), "${pauseDetail(input)} · $gps · $send")
+            !input.hasFix -> Status(str(R.string.status_searching), "$gps · $send")
+            input.isStationary -> Status(tracking, "${str(R.string.status_stationary)} · $gps · $send")
+            else -> Status(tracking, "$gps · $send")
         }
+    }
+
+    private fun gpsSegment(input: StatusInput): String {
+        val accuracy = input.accuracyM?.let { str(R.string.status_accuracy, Math.round(it)) }
+            ?: str(R.string.status_unknown)
+        val sats = if (input.satellitesUsed != null) {
+            str(
+                R.string.status_sats,
+                input.satellitesUsed,
+                input.satellitesInView?.toString() ?: str(R.string.status_unknown)
+            )
+        } else str(R.string.status_unknown)
+        val points = count(R.plurals.status_points_today, input.todayPoints)
+        return "$accuracy · $sats · $points"
     }
 
     private fun str(@StringRes id: Int, vararg args: Any): String =
@@ -198,8 +217,13 @@ class NotificationHelper(
     }
 
     // The fix minute is part of the key so the header age is at most a minute behind.
+    // Sats and today's count join exactly; accuracy rounds to the metre so jitter
+    // inside one metre does not re-post on every fix.
     private fun dedupKey(status: Status, input: StatusInput): String =
-        "${status.title}\n${status.text}\n${input.lastFixMs / 60_000}"
+        "${status.title}\n${status.text}\n${input.lastFixMs / 60_000}" +
+            "\n${input.accuracyM?.let { Math.round(it) }}" +
+            "\n${input.satellitesUsed}/${input.satellitesInView}" +
+            "\n${input.todayPoints}"
 
     /** Also primes the dedup key, so the first update() does not re-post the same state. */
     fun buildForegroundNotification(input: StatusInput): Notification {
