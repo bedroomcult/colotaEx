@@ -672,8 +672,16 @@ describe("TrackMap speed ramp", () => {
   it("maps the same speed to the same colour in absolute mode across trips", () => {
     renderMap({ locations, colors: rampColors, colorMode: "absolute" })
 
-    // 0 green, 12 red, the middle two interpolated on fixed 0-12 anchors.
-    expect(drawnColors()).toEqual([RAMP[0], expect.any(String), expect.any(String), RAMP[3]])
+    // 0 green, 12 red, fixed 0-12 anchors; 8 lands exactly on the orange stop.
+    expect(drawnColors()).toEqual([
+      RAMP[0],
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      RAMP[2],
+      expect.any(String),
+      RAMP[3]
+    ])
     const [, second] = drawnColors()
     expect(second).not.toBe(RAMP[0])
     expect(second).not.toBe(RAMP[3])
