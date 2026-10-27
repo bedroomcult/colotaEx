@@ -115,9 +115,9 @@ class NotificationHelperTest {
 
             val n = posted()
             assertNull(n.extras.getString(Notification.EXTRA_TITLE))
-            assertEquals("Tracking · 2 queued", n.extras.getString(Notification.EXTRA_TEXT))
+            assertEquals("Tracking · – · – · 0 pts today · 2 queued", n.extras.getString(Notification.EXTRA_TEXT))
             assertEquals("Tracking", n.extras.getString(Notification.EXTRA_TITLE_BIG))
-            assertEquals("2 queued", n.extras.getString(Notification.EXTRA_BIG_TEXT))
+            assertEquals("– · – · 0 pts today · 2 queued", n.extras.getString(Notification.EXTRA_BIG_TEXT))
         }
 
         @Test
@@ -126,9 +126,9 @@ class NotificationHelperTest {
 
             val n = posted()
             assertNull(n.extras.getString(Notification.EXTRA_TITLE))
-            assertEquals("Paused · Zone WiFi · resumes when you leave · All sent", n.extras.getString(Notification.EXTRA_TEXT))
+            assertEquals("Paused · Zone WiFi · resumes when you leave · – · – · 0 pts today · All sent", n.extras.getString(Notification.EXTRA_TEXT))
             assertEquals("Paused", n.extras.getString(Notification.EXTRA_TITLE_BIG))
-            assertEquals("Zone WiFi · resumes when you leave · All sent", n.extras.getString(Notification.EXTRA_BIG_TEXT))
+            assertEquals("Zone WiFi · resumes when you leave · – · – · 0 pts today · All sent", n.extras.getString(Notification.EXTRA_BIG_TEXT))
         }
 
         @Test
@@ -138,7 +138,7 @@ class NotificationHelperTest {
 
             val n = posted()
             assertEquals("Paused", n.extras.getString(Notification.EXTRA_TITLE))
-            assertEquals("Zone WiFi · resumes when you leave · All sent", n.extras.getString(Notification.EXTRA_TEXT))
+            assertEquals("Zone WiFi · resumes when you leave · – · – · 0 pts today · All sent", n.extras.getString(Notification.EXTRA_TEXT))
         }
 
         @Test

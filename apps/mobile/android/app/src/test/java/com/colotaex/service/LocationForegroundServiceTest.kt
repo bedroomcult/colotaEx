@@ -113,6 +113,7 @@ class LocationForegroundServiceTest {
 
         mockkObject(LocationServiceModule)
         every { LocationServiceModule.sendLocationEvent(any(), any(), any()) } returns true
+        every { LocationServiceModule.sendLocationEvent(any(), any(), any(), any(), any()) } returns true
         every { LocationServiceModule.sendPauseZoneEvent(any(), any()) } returns true
         every { LocationServiceModule.sendPauseZoneEvent(any(), any(), any()) } returns true
         every { LocationServiceModule.sendTrackingStoppedEvent(any()) } returns true
@@ -267,7 +268,7 @@ class LocationForegroundServiceTest {
 
         invokeHandleLocationUpdate(location)
 
-        verify { LocationServiceModule.sendLocationEvent(location, 80, 2) }
+        verify { LocationServiceModule.sendLocationEvent(location, 80, 2, any(), any()) }
     }
 
     @Test
