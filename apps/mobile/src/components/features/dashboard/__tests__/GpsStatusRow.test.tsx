@@ -106,7 +106,7 @@ describe("GpsStatusRow", () => {
     })
 
     expect(getByTestId("gps-status").props.accessibilityLabel).toMatch(
-      /^±18 m last fix, \d+s ago$/
+      /^±18 m last fix, sats – · \d+s ago$/
     )
   })
 
