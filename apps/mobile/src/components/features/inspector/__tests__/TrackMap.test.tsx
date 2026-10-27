@@ -619,23 +619,38 @@ describe("TrackMap speed ramp", () => {
   const RAMP = ["#2E9E4F", "#E8C547", "#E8813A", "#D93A3A"]
   const locations = [
     { ...loc(52.5, 13.4), id: 1, speed: 0 },
-    { ...loc(52.52, 13.42), id: 2, speed: 2 },
-    { ...loc(52.55, 13.45), id: 3, speed: 6 },
-    { ...loc(52.6, 13.5), id: 4, speed: 12 }
+    { ...loc(52.51, 13.41), id: 2, speed: 2 },
+    { ...loc(52.52, 13.42), id: 3, speed: 4 },
+    { ...loc(52.55, 13.45), id: 4, speed: 6 },
+    { ...loc(52.57, 13.47), id: 5, speed: 8 },
+    { ...loc(52.58, 13.48), id: 6, speed: 10 },
+    { ...loc(52.6, 13.5), id: 7, speed: 12 }
   ]
   const drawnColors = () => mockBuildPoints.mock.calls.at(-1)![2] as string[]
 
   it("ramps from green at the slowest fix to red at the fastest", () => {
     renderMap({ locations, colors: rampColors, colorMode: "speed" })
 
-    expect(drawnColors()).toEqual([RAMP[0], expect.any(String), expect.any(String), RAMP[3]])
+    expect(drawnColors()).toEqual([
+      RAMP[0],
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      RAMP[3]
+    ])
   })
 
   it("passes through yellow and orange, so middle speeds are neither green nor red", () => {
     renderMap({ locations, colors: rampColors, colorMode: "speed" })
 
-    const [, second, third] = drawnColors()
-    for (const middle of [second, third]) {
+    // Speed 2 sits at the p10 edge (green); 4-10 interpolate; 12 hits the max (red).
+    const [, second, ...rest] = drawnColors()
+    expect(second).toBe(RAMP[0])
+    const middles = rest.slice(0, -1)
+    expect(middles).toHaveLength(4)
+    for (const middle of middles) {
       expect(middle).not.toBe(RAMP[0])
       expect(middle).not.toBe(RAMP[3])
     }

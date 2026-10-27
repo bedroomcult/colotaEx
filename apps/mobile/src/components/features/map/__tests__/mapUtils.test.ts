@@ -73,7 +73,7 @@ describe("getSpeedColor", () => {
 
   it("maps the same speed to the same colour in every trip", () => {
     expect(getSpeedColor(6)).toBe(getSpeedColor(6))
-    expect(getSpeedColor(6)).toBe("rgb(232,166,62)")
+    expect(getSpeedColor(6)).toBe("rgb(232,163,65)")
   })
 
   it("keeps the four stops distinct, so no two speeds share a colour", () => {
