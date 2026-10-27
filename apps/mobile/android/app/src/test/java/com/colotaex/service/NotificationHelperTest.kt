@@ -37,10 +37,15 @@ class NotificationHelperTest {
             lastFixMs: Long = FIX,
             isOfflineMode: Boolean = false,
             queuedCount: Int = 0,
-            lastSyncTime: Long = 0L
+            lastSyncTime: Long = 0L,
+            accuracyM: Float? = null,
+            satellitesUsed: Int? = null,
+            satellitesInView: Int? = null,
+            todayPoints: Int = 0
         ) = NotificationHelper.StatusInput(
             locationEnabled, isPaused, isWifiPaused, isMotionlessPaused, isStationary,
-            hasFix, lastFixMs, isOfflineMode, queuedCount, lastSyncTime
+            hasFix, lastFixMs, isOfflineMode, queuedCount, lastSyncTime,
+            accuracyM, satellitesUsed, satellitesInView, todayPoints
         )
     }
 
