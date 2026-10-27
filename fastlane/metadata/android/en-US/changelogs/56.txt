@@ -1,2 +1,3 @@
 - Points toggle above the locate disc in trip details; hides the per-fix circles
 - Speed gradient now runs green-yellow-orange-red so the middle range is readable
+- Live notification shows GPS accuracy, satellites used and today's point count
