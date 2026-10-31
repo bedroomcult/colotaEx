@@ -54,6 +54,7 @@ class NotificationHelper(
         KILLED(R.string.stop_reason_killed),
         SHORTCUT(R.string.stop_reason_shortcut),
         AUTOMATION(R.string.stop_reason_automation),
+        TILE(R.string.stop_reason_tile),
         OTHER(R.string.stop_reason_other)
     }
 

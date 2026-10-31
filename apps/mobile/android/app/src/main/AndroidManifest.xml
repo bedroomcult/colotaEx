@@ -94,6 +94,18 @@
             android:exported="true"
             android:excludeFromRecents="true" />
 
+        <!-- Quick Settings tile for start/stop tracking; the user adds it via QS edit mode -->
+        <service
+            android:name=".triggers.TrackingTileService"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="false"
+            android:icon="@drawable/ic_tile_tracking"
+            android:label="@string/qs_tile_label">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <!-- Foreground location service -->
         <service
             android:name=".service.LocationForegroundService"

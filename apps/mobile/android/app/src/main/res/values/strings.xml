@@ -5,6 +5,9 @@
     <string name="shortcut_stop_short">Stop</string>
     <string name="shortcut_stop_long">Stop Tracking</string>
 
+    <string name="qs_tile_label">Tracking</string>
+    <string name="stop_reason_tile">Stopped via quick settings tile</string>
+
     <string name="channel_tracking">Location Tracking</string>
     <string name="channel_tracking_description">Shows active tracking status and sync queue</string>
     <string name="channel_stopped">Tracking stopped</string>
