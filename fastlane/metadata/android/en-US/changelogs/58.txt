@@ -1,0 +1,2 @@
+- Quick Settings tile to start and stop tracking from the notification shade
+- Tile state follows tracking started or stopped anywhere, including app shortcuts and automation
